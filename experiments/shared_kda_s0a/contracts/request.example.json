@@ -126,6 +126,7 @@
     }
   ],
   "controls": {
+    "density_enabled": true,
     "density_notes_per_second": [
       2,
       4
