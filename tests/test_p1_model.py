@@ -48,7 +48,7 @@ class P1Tests(unittest.TestCase):
             m = P1Model(dataclasses.replace(CFG, phira_location=loc))
             loss, met = m(bt)
             self.assertTrue(torch.isfinite(loss))
-            for k in ('time', 'residual', 'cont', 'type', 'lane', 'end_block', 'end_coarse', 'end_fine'):
+            for k in ('time', 'offset', 'cont', 'type', 'lane', 'end_block', 'end_cell', 'end_off', 'ssl'):
                 self.assertIn(k, met)
             for k in ('line', 'side', 'x'):
                 self.assertEqual(k in met, loc)
@@ -68,10 +68,68 @@ class P1Tests(unittest.TestCase):
         bt2['note_x'][:, i:] += 0.3
         bt2['note_dur'][:, i:] += 1.0
         with torch.no_grad():
-            h, pa, fi, _ = m.encode(bt)
-            h2, _, _, _ = m.encode(bt2)
+            h, pa, _ = m.encode(bt)
+            h2, pa2, _ = m.encode(bt2)
+            t_prev = torch.cat([torch.full((2, 1), -0.001), bt['grp_t']], 1)
+            lg, _, _ = m.time_logits(bt, h, pa, t_prev)
+            lg2, _, _ = m.time_logits(bt2, h2, pa2, t_prev)
         torch.testing.assert_close(h[:, :i + 1], h2[:, :i + 1], atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(lg[:, :i + 1], lg2[:, :i + 1], atol=1e-4, rtol=1e-4)  # pointer incl. the rhythm kernel
         self.assertGreater((h[:, i + 1:] - h2[:, i + 1:]).abs().max().item(), 1e-4)
+
+    def test_future_group_times_do_not_reach_earlier_rows(self):
+        """The rhythm kernel and the chart stream read only earlier targets / the prefix: shifting the times of
+        groups >= i leaves rows <= i (hidden states, pointer logits, offset logits) unchanged."""
+        torch.manual_seed(4)
+        m = P1Model(CFG).eval()
+        bt = batch(2, seed=9)
+        i = max(1, int(bt['grp_valid'][0].sum()) // 2)
+        bt2 = copy.deepcopy(bt)
+        bt2['grp_t'][:, i:] += 0.123
+        bt2['grp_cell'][:, i:] = (bt2['grp_cell'][:, i:] + 3).clamp(max=199)
+        bt2['prev_onsets'][:, i + 1:] += 0.123  # later rows' context moves with them; rows <= i are untouched
+        with torch.no_grad():
+            h, pa, _ = m.encode(bt)
+            h2, pa2, _ = m.encode(bt2)
+            lg, _, _ = m.time_logits(bt, h, pa, torch.cat([torch.full((2, 1), -0.001), bt['grp_t']], 1))
+            lg2, _, _ = m.time_logits(bt2, h2, pa2, torch.cat([torch.full((2, 1), -0.001), bt2['grp_t']], 1))
+        torch.testing.assert_close(h[:, :i + 1], h2[:, :i + 1], atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(lg[:, :i], lg2[:, :i], atol=1e-4, rtol=1e-4)
+
+    def test_int8_projection_matches_dense(self):
+        from beatfcn.model.p1 import Int8MixProj
+        torch.manual_seed(0)
+        cells = torch.randint(-100, 100, (2, 3, 40, 8, 16), dtype=torch.int8)
+        W = torch.randn(16, 12, requires_grad=True)
+        out = Int8MixProj.apply(cells, W)
+        ref = (cells.float().mean(1).reshape(2, -1, 16) @ W)
+        torch.testing.assert_close(out, ref, atol=1e-4, rtol=1e-4)
+        g = torch.randn_like(out)
+        (out * g).sum().backward()
+        gW = W.grad.clone()
+        W.grad = None
+        (ref * g).sum().backward()
+        torch.testing.assert_close(gW, W.grad, atol=1e-3, rtol=1e-4)
+
+    def test_song_stream_window_and_masking(self):
+        """Padded song blocks (blk_valid False) never influence the encoding: appending invalid blocks leaves
+        hidden states unchanged."""
+        torch.manual_seed(5)
+        m = P1Model(CFG).eval()
+        bt = batch(2, seed=11)
+        bt2 = copy.deepcopy(bt)
+        NB = bt['blk_valid'].shape[1]
+        pad_blocks = 7
+        for k in ('blk_valid', 'blk_t', 'blk_cov', 'blk_grid', 'blk_counts'):
+            z = torch.zeros(2, pad_blocks, *bt[k].shape[2:], dtype=bt[k].dtype)
+            bt2[k] = torch.cat([bt[k], z], 1)
+        bt2['blk_grid'][:, NB:] = 1  # garbage in the padding: must be ignored
+        T = bt['song_cells'].shape[1]
+        bt2['song_cells'] = torch.cat([bt['song_cells'], torch.randn(2, T, pad_blocks * F.BLOCK_CELLS // F.STREAM_STRIDE, 8, CFG.tap_dim)], 2)
+        with torch.no_grad():
+            h, _, _ = m.encode(bt)
+            h2, _, _ = m.encode(bt2)
+        torch.testing.assert_close(h, h2, atol=1e-5, rtol=1e-5)
 
     def test_overfit_small_batch(self):
         torch.manual_seed(2)
@@ -112,54 +170,3 @@ class LegalityTests(unittest.TestCase):
         self.assertTrue(torch.allclose(loss, ref))
 
 
-class PackedTests(unittest.TestCase):
-    def test_packed_flex_path_matches_padded_sdpa_path(self):
-        """Packing valid rows + FlexAttention block mask is the same computation as padded SDPA + dense mask."""
-        import dataclasses
-        bt = batch(6)
-        res = {}
-        for packed in (False, True):
-            torch.manual_seed(0)
-            m = P1Model(dataclasses.replace(CFG, packed=packed, dropout=0.0, selection=True)).eval()
-            b = dict(bt)
-            b['w_select'] = 0.2
-            loss, met = m(b)
-            loss.backward()
-            res[packed] = (float(loss), {k: tuple(float(x) for x in v) for k, v in met.items() if k != '_illegal'},
-                           torch.cat([p.grad.flatten() for p in m.parameters() if p.grad is not None]))
-        (l0, m0, g0), (l1, m1, g1) = res[False], res[True]
-        self.assertAlmostEqual(l0, l1, places=4)
-        for k in m0:
-            self.assertEqual(m0[k][1:], m1[k][1:], k)
-        self.assertLess(float((g0 - g1).norm() / g0.norm()), 1e-5)
-
-
-class BlockMaskTests(unittest.TestCase):
-    def test_block_level_mask_is_superset_of_dense_reference(self):
-        """The block list built from per-block core/time ranges must include every block the element-exact
-        mask_mod (evaluated densely by create_block_mask) marks non-empty."""
-        from torch.nn.attention.flex_attention import create_block_mask
-        from beatfcn.model import features as FE
-        from beatfcn.model.batch import dequant
-        bt = dequant(batch(5, seed=2))
-        m = P1Model(CFG).eval()
-        with torch.no_grad():
-            rows, lens, times, timed, valid = m._rows(bt)
-            Y, ty, vy = m._y_rows(bt, m.group_embedding(bt))
-            rv = torch.cat(valid + [vy], 1)
-            B, Np = rv.shape
-            kinds = torch.cat([torch.full((n,), k) for k, n in enumerate(lens + [Np - sum(lens)])])
-            idx = rv.reshape(-1).nonzero()[:, 0]
-            N = idx.shape[0]
-            pad = -(-N // m.PACK_BUCKET) * m.PACK_BUCKET - N
-            core = torch.cat([idx // Np, torch.full((pad,), B)])
-            pos = idx % Np
-            kind = torch.cat([kinds[pos], torch.zeros(pad, dtype=kinds.dtype)])
-            ypos = torch.cat([pos - sum(lens), torch.zeros(pad, dtype=pos.dtype)])
-            t_q = torch.cat([torch.cat(times + [ty], 1).reshape(-1)[idx], torch.zeros(pad)])
-            bm = m._block_mask(bt, core, kind, ypos, t_q, 8)
-            BNa = B * FE.LOCAL_CELLS * 8
-            ref = create_block_mask(bm.mask_mod, None, None, N + pad, BNa + N + pad, device='cpu', BLOCK_SIZE=128)
-            ours, theirs = bm.to_dense()[0, 0].bool(), ref.to_dense()[0, 0].bool()
-        self.assertEqual(int((theirs & ~ours).sum()), 0)
-        self.assertLess(float(ours.float().mean()), 0.25)  # and it is sparse, not a dense superset

@@ -49,9 +49,15 @@ class TransportTests(unittest.TestCase):
         da, db = dequant(dict(a)), dequant(dict(b))
         self.assertEqual(set(da), set(db))
         for k in db:
-            if torch.is_tensor(db[k]):
-                self.assertEqual(da[k].dtype, db[k].dtype, k)
-                self.assertTrue(torch.allclose(da[k], db[k], atol=1e-6), k)
+            if not torch.is_tensor(db[k]):
+                continue
+            if k == 'song_cells':  # stays int8 for the block encoder: equal up to the per-dim scale
+                sc = torch.stack([torch.as_tensor(np.asarray(quant.taps[l].scale, np.float32)) for l in CFG.taps[-2:]])  # song taps
+                self.assertEqual(da[k].dtype, torch.int8)
+                self.assertTrue(torch.allclose(da[k].float() * sc[None, :, None, None, :], db[k], atol=1e-6), k)
+                continue
+            self.assertEqual(da[k].dtype, db[k].dtype, k)
+            self.assertTrue(torch.allclose(da[k], db[k], atol=1e-6), k)
 
     def test_int8_cf_pairs_match_float(self):
         quant, flt = songs_pair(1)

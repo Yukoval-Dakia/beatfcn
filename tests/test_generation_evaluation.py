@@ -128,9 +128,9 @@ class EvaluationTests(unittest.TestCase):
         holds,runs,heads=core_context(s,ex,{})
         seen=[]
         def inner(*args):
-            seen.append(args[7].copy())
+            seen.append(args[6].copy())  # busy lanes (after model, bt, h, pa, t_rel, right_new)
             return [{'type':0,'lane':1,'line':-1,'side':-1,'x':0.}]
-        with patch('beatfcn.model.sample._pick',side_effect=[F.CORE_BINS+1,0]), \
+        with patch('beatfcn.model.sample._pick',side_effect=[F.CORE_US//F.CELL_US+1,0]), \
              patch('beatfcn.model.sample._inner',side_effect=inner):
             groups=generate_core(P1Model(CFG).eval(),ex,song(0),holds,runs,heads)
         self.assertTrue(seen[0][0])

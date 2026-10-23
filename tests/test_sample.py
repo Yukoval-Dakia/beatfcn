@@ -80,7 +80,7 @@ class IncrementalDecodingTests(unittest.TestCase):
         m = P1Model(dataclasses.replace(CFG, dropout=0.0, selection=True)).eval()
         full_bt = dequant(collate([ex], [song], CFG.taps, CFG.top_tap))
         with torch.no_grad():
-            h_full, pa_full, fi_full, _ = m.encode(full_bt)
+            h_full, pa_full, _ = m.encode(full_bt)
             intent_full = m._intent_h.clone()
             cache = {}
             for k in range(4):
@@ -89,10 +89,10 @@ class IncrementalDecodingTests(unittest.TestCase):
                 work.right = ex.right[:k + 1]
                 bt = dequant(collate([work], [song], CFG.taps, CFG.top_tap))
                 if k == 0:
-                    h, pa, fi, _ = m.encode(bt, cache)
+                    h, pa, _ = m.encode(bt, cache)
                     row = h[:, 0:1]
                 else:
-                    row, pa, fi, _ = m.encode_step(bt, cache)
+                    row, pa, _ = m.encode_step(bt, cache)
                 self.assertTrue(torch.allclose(row, h_full[:, k:k + 1], atol=2e-5), f'row {k}')
             self.assertTrue(torch.allclose(pa, pa_full, atol=1e-6))
             self.assertTrue(torch.allclose(m._intent_h, intent_full, atol=1e-6))

@@ -1,10 +1,10 @@
-"""Constrained generation for one core with a P1 model, and core-level evaluation.
+"""Constrained generation for one core with a P1 model (v2.1), and core-level evaluation.
 
-Generation re-encodes the whole core once per group (no KV cache; P5 replaces this). Every
-choice is sampled from a legality-masked distribution: new heads only at editable times and
-strictly after the previous group, no duplicate or hold-occupied lane, hold ends inside the
-editable run and before the next same-lane head. Greedy decoding is available for
-reproducibility (design: inference.greedy_available_for_reproducibility).
+Incremental decoding: the prefix rows, the local audio and the song tokens are encoded once per core
+(K/V cache); every later group appends one Y row. Every choice is sampled from a legality-masked
+distribution: new heads only at editable times and strictly after the previous group (40 ms cell, then
+the in-cell ms offset), no duplicate or hold-occupied lane, hold ends inside the editable run and before
+the next same-lane head. Greedy decoding is available for reproducibility.
 """
 from __future__ import annotations
 import copy
@@ -14,7 +14,7 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 from . import features as FE
-from .batch import collate, dequant, MAX_NOTES
+from .batch import collate, collate_meta, dequant, SongInfo, MAX_NOTES, CORE_CELLS, MS_PER_CELL
 from .p1 import P1Model, NEG
 
 
@@ -45,6 +45,7 @@ def generate_core(model: P1Model, ex: FE.CoreExample, song, observed_holds, runs
     ended = False
     timed_out = False
     cache = {} if incremental else None  # per-core K/V cache: later groups append one Y row instead of re-encoding
+    h0c = FE.HALO_US // FE.CELL_US
     for _ in range(FE.MAX_GROUPS):
         if deadline is not None and time.perf_counter() >= deadline:
             timed_out = True
@@ -52,29 +53,35 @@ def generate_core(model: P1Model, ex: FE.CoreExample, song, observed_holds, runs
         # right-lookahead rows for the current teacher-forced prefix
         times = [c0 - 1] + [c0 + g['t_rel_us'] for g in work.groups]
         work.right = np.array([_right(t, observed_heads, runs) for t in times], np.float32)
-        bt = dequant({k: (v.to(device) if torch.is_tensor(v) else v) for k, v in collate([work], [song], c.taps, c.top_tap).items()})
+        if cache:  # audio and song tokens are cached: metadata only
+            raw = collate_meta([work], [SongInfo.of(song, 0, c.taps[0])], c.taps, c.top_tap, c.tap_dim, song.summary.shape[-1], False)
+            raw.pop('_audio')
+        else:
+            raw = collate([work], [song], c.taps, c.top_tap)
+        bt = dequant({k: (v.to(device) if torch.is_tensor(v) else v) for k, v in raw.items()})
         G = len(work.groups)
         if cache is None or not cache:
-            h, pa, fi, _ = model.encode(bt, cache)
+            h, pa, _ = model.encode(bt, cache)
             hrow = h[:, G:G + 1]
         else:
-            hrow, pa, fi, _ = model.encode_step(bt, cache)
+            hrow, pa, _ = model.encode_step(bt, cache)
         model._sel_core = None
         if model.c.selection:
-            c0c = FE.HALO_US // FE.CELL_US
-            model._sel_core = model.selection_field(pa[:, c0c:c0c + FE.CORE_US // FE.CELL_US], model._intent_h)
-        logits, mask, ok = model.time_logits(bt, hrow, pa, fi, torch.tensor([[t_prev / 1e6 if t_prev >= 0 else -0.001]], device=device))
+            model._sel_core = model.selection_field(pa[:, h0c:h0c + CORE_CELLS], model._intent_h)
+        logits, mask, ok = model.time_logits(bt, hrow, pa, torch.tensor([[t_prev / 1e6 if t_prev >= 0 else -0.001]], device=device))
         k = _pick(logits[0, 0].cpu(), mask[0, 0].cpu(), rng, temperature, top_p, greedy)
         if k == 0:
             ended = True
             break
-        if k <= FE.CORE_BINS:
-            b = k - 1
-            rl = model.residual_logits(hrow[:, 0], fi, torch.tensor([b], device=device))
-            r = _pick(rl[0].cpu(), ok[0, 0, b].cpu(), rng, temperature, top_p, greedy)
-            t_rel, copy_idx = b * FE.BIN_US + r * FE.MS, -1
+        if k <= CORE_CELLS:
+            cell = k - 1
+            tok = model._cell_tokens(pa, torch.tensor([[h0c + cell]], device=device))[:, 0]  # [1,3,8,P]
+            ol = model.offset_logits(model.off_q(hrow[:, 0]), tok, bt['prev_onsets'][:, G],
+                                     torch.tensor([cell * FE.CELL_US / FE.SEC], device=device))
+            r = _pick(ol[0].cpu(), ok[0, 0, cell].cpu(), rng, temperature, top_p, greedy)
+            t_rel, copy_idx = cell * FE.CELL_US + r * FE.MS, -1
         else:
-            copy_idx = k - 1 - FE.CORE_BINS
+            copy_idx = k - 1 - CORE_CELLS
             t_rel = int(ex.copy_times[copy_idx])
         t_abs = c0 + t_rel
         busy = np.zeros(4, bool)
@@ -85,7 +92,7 @@ def generate_core(model: P1Model, ex: FE.CoreExample, song, observed_holds, runs
             if onset == t_abs and lane >= 0:
                 busy[lane] = True
         right_new = np.array(_right(t_abs - 1, observed_heads, runs), np.float32)
-        notes = _inner(model, bt, hrow[:, 0], pa, fi, t_rel, right_new, busy, song, ex, t_abs, holds, runs, rng,
+        notes = _inner(model, bt, hrow[:, 0], pa, t_rel, right_new, busy, song, ex, t_abs, holds, runs, rng,
                        temperature, top_p, greedy, device, observed_heads)
         if not notes:
             # No legal note at this time. Advance the cursor, without emitting an empty group.
@@ -111,10 +118,10 @@ def _right(t, observed_heads, runs):
     return (min(dt, 60.0), nxt[1] if nxt else -1, nxt[2] if nxt else -1, min((run_end - t) / FE.SEC, 60.0))
 
 
-def _inner(model, bt, h, pa, fi, t_rel, right_new, busy, song, ex, t_abs, holds, runs, rng, temperature, top_p, greedy, device, observed_heads=()):
+def _inner(model, bt, h, pa, t_rel, right_new, busy, song, ex, t_abs, holds, runs, rng, temperature, top_p, greedy, device, observed_heads=()):
     c = model.c
     mode = int(bt['mode'][0])
-    hs = model.gru_init(h, pa, fi, torch.tensor([t_rel / FE.SEC], device=device), torch.from_numpy(right_new)[None].to(device),
+    hs = model.gru_init(h, pa, torch.tensor([t_rel / FE.SEC], device=device), torch.from_numpy(right_new)[None].to(device),
                         torch.from_numpy(busy)[None].to(device))
     allowed = bt['allowed_types'][0].cpu() & torch.tensor([[1, 1, 0, 0], [1, 1, 1, 1]], dtype=torch.bool)[mode]
     used = torch.from_numpy(busy.copy())
@@ -203,21 +210,19 @@ def _hold_end(model, o, song, onset, n, holds, runs, rng, temperature, top_p, gr
     a, e = cells, min(cells + det.shape[0], top.shape[0])
     if e > a:
         det[:e - a] = np.asarray(top[a:e], np.float32)
-    det = model.det_proj(model.tap_ln[model.c.taps.index(model.c.top_tap)](torch.from_numpy(det).to(device)) + model.band)
-    q = model.det_q(torch.cat([o, feats[blk][None]], -1))[0]
-    cell = torch.logsumexp(torch.einsum('p,cnp->cn', q, det) / math.sqrt(q.shape[-1]), -1)
-    cl = cell.repeat_interleave(4) + model.det_sub.weight[:, 0].repeat(det.shape[0])
+    cell, _, dtok = model.hold_cells(o, blocks.to(device)[None], torch.from_numpy(det).to(device)[None], torch.tensor([blk], device=device))
     start = (b0 + blk) * FE.BLOCK_US
-    cb = start + torch.arange(FE.BLOCK_US // FE.BIN_US) * FE.BIN_US
-    cmask = (cb <= hi) & (cb + FE.BIN_US - FE.MS >= lo)
+    cb = start + torch.arange(FE.BLOCK_US // FE.CELL_US) * FE.CELL_US
+    cmask = (cb <= hi) & (cb + FE.CELL_US - FE.MS >= lo)
     if not cmask.any():
         return None
-    co = _pick(cl.cpu(), cmask, rng, temperature, top_p, greedy)
-    fb = start + co * FE.BIN_US + torch.arange(10) * FE.MS
+    co = _pick(cell[0].cpu(), cmask, rng, temperature, top_p, greedy)
+    tok = model._cell_tokens(dtok, torch.tensor([[co]], device=device))[:, 0]  # [1,3,8,P]
+    ol = model.offset_logits(model.off_hold_q(o), tok)
+    fb = start + co * FE.CELL_US + torch.arange(MS_PER_CELL) * FE.MS
     fmask = (fb <= hi) & (fb >= lo)
-    ctx = det.mean(1)[co // 4]
-    fi = _pick(model.end_fine(torch.cat([o, ctx[None]], -1))[0].cpu(), fmask, rng, temperature, top_p, greedy)
-    return int(start + co * FE.BIN_US + fi * FE.MS)
+    off = _pick(ol[0].cpu(), fmask, rng, temperature, top_p, greedy)
+    return int(start + co * FE.CELL_US + off * FE.MS)
 
 
 def match_f1(pred_us, true_us, tol_us):

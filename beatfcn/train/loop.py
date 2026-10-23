@@ -42,13 +42,14 @@ class CoreSampler:
     volumes); each resident song serves `residence` draws and is then replaced by a fresh random song.
     Batches still mix songs; only the read pattern changes."""
 
-    def __init__(self, charts, load, song_cache, seed, salient=None, pool=0, residence=4, limits=None, audit=None):
+    def __init__(self, charts, load, song_cache, seed, salient=None, pool=0, residence=4, limits=None, audit=None, perturb=False):
         """limits: per-core caps {'G','K','R','A','holds'} (static-shape training); cores beyond them are
         skipped here, so a batch never has to be thrown away at collate time."""
         self.charts, self.load, self.song_cache = charts, load, song_cache
         self.limits = limits
         self.pool, self.residence, self.resident = pool, residence, {}
         self.salient = salient  # song -> spectral-flux peak times (us) for unselected reference evidence
+        self.perturb = perturb  # training: perturb the generated context (features.PERTURB); never for validation
         self.rng = np.random.default_rng(seed)
         by_mode = {}
         for c in charts:
@@ -84,7 +85,8 @@ class CoreSampler:
         trace.update(stage='core', kind=s.recipe.get('kind'))
         c0 = F.choose_core(s, np.random.default_rng([seed, 1]), chart_row['duration_us'])
         trace['c0_us'] = c0
-        ex = F.build_core(s, chart.events, c0, chart_row['duration_us'])
+        ex = F.build_core(s, chart.events, c0, chart_row['duration_us'],
+                          perturb=np.random.default_rng([seed, 2]) if self.perturb else None)
         trace.update(stage='bounds', groups=len(ex.groups), known=len(ex.known), refs=len(ex.refs),
                      notes=sum(len(g['notes']) for g in ex.groups),
                      holds=sum('end_rel_us' in n for g in ex.groups for n in g['notes']))

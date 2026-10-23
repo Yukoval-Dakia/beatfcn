@@ -54,7 +54,7 @@ class FeatureTests(unittest.TestCase):
                 # excluded on purpose: P0 derives them (as bands) from the full chart by design (spec §8).
                 kept = tuple(h for h in s.hidden if h.onset_us < c0)
                 ex2 = F.build_core(dataclasses.replace(s, hidden=kept), chart.events, c0, DURATION)
-                for name in ('known', 'refs', 'cell_state', 'bin_ok', 'copy_times', 'summary_stats'):
+                for name in ('known', 'refs', 'cell_state', 'bin_ok', 'copy_times', 'blk_grid', 'blk_cov', 'blk_counts'):
                     np.testing.assert_array_equal(getattr(ex, name), getattr(ex2, name), err_msg=name)
                 gen = ex.known[ex.known[:, 7] == 1]
                 self.assertTrue((gen[:, 0] < 0).all(), 'generated context must precede the core')

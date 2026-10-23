@@ -50,7 +50,7 @@ def _stream(rows, corpus_args, seed, micro_batch, taps, top_tap, meta=True, stat
             song_cache = corpus.song_info if meta else (lambda sha: corpus.song(sha, in_memory=True))
             smp = CoreSampler(corpus.train_rows(rows), corpus.chart, song_cache, seed * 1000 + wid,
                               salient=corpus.salient_us, pool=pool, residence=RESIDENCE,
-                              limits=STATIC_CORE if static else None)
+                              limits=STATIC_CORE if static else None, perturb=True)
             from beatfcn.model import features as F
             t_w = time.time()
             Dt, quant = corpus.tap_dim, corpus.quant

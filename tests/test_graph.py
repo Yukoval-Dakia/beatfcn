@@ -62,9 +62,10 @@ class GraphedStepTests(unittest.TestCase):
 
     def test_static_batches_share_one_shape(self):
         a, b = _static_batch(3, 1), _static_batch(5, 2)
-        for k in ('grp_t', 'known', 'refs', 'copy_t', 'summary', 'hold_index', 'hold_detail'):
+        for k in ('grp_t', 'known', 'refs', 'copy_t', 'song_cells', 'hold_index', 'hold_detail'):
             self.assertEqual(a[k].shape[1:], b[k].shape[1:], k)
         self.assertEqual(a['grp_t'].shape[1], STATIC['G'])
+        self.assertEqual(a['song_cells'].shape[2], STATIC['C'] // F.STREAM_STRIDE)
         self.assertEqual(a['hold_index'].shape[0], STATIC['H'])
 
     def test_static_overflow_is_a_skip(self):

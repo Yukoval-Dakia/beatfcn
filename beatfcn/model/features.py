@@ -12,9 +12,9 @@ indexed, not transformed), timing-map input (DATA_RULES §3), hard 2-finger
 profiles, structured-missing tasks.
 """
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import numpy as np
-from ..events.canonical import Event, MODE_TYPES
+from ..events.canonical import Event, MODE_TYPES, LaneLoc
 from ..events import controls as C
 
 MS = 1000
@@ -33,6 +33,12 @@ MAX_REF = 256
 MAX_GROUPS = 256
 MAX_LINES = 64
 MAX_SUMMARY = 600
+BLOCK_CELLS = 10  # whole-song stream block: 400 ms of song cells (FIRST_CANDIDATE v2.1 §3.2)
+STREAM_BLOCK_US = BLOCK_CELLS * CELL_US
+STREAM_STRIDE = 2  # the block encoder reads every other cell (80 ms) of the last two taps: static memory x4 smaller
+MAX_STREAM_CELLS = 16000  # the song stream sees at most 10.7 min of song cells (a window centred on the core beyond)
+# context perturbation (exposure bias, v2.1 §3.3): applied to the GENERATED context only, never to observed events
+PERTURB = {'drop': 0.10, 'jitter_us': 8_000, 'jitter_max_us': 25_000, 'lane': 0.03, 'hold_to_tap': 0.02, 'insert': 0.05}
 MODES = ('mania_4k', 'phira')
 TYPES = ('tap', 'hold', 'flick', 'drag')
 SIDES = ('above', 'below')
@@ -93,7 +99,12 @@ class CoreExample:
     cell_state: np.ndarray  # [LOCAL_CELLS] region state per 40 ms cell (state at cell start)
     bin_ok: np.ndarray  # [CORE_BINS, 10] bool: ms inside each 10 ms bin where a NEW head is allowed
     copy_times: np.ndarray  # [A] rel us (int64) of observed heads in editable core time, usable by COPY_TIME
-    summary_stats: np.ndarray  # [S, 6] per 2 s bucket: log1p heads by type (4), editable frac, empty frac
+    # whole-song chart stream, one entry per 400 ms block of the song (v2.1 §3.2): occupancy grid
+    # [NB, BLOCK_CELLS, 4 lanes|types, (onset, hold active)], coverage [NB, 3] (fraction before c0, editable,
+    # empty) and log1p onset counts by type [NB, 4]; built from observed events and the generated prefix only
+    blk_grid: np.ndarray
+    blk_cov: np.ndarray
+    blk_counts: np.ndarray
     groups: list = field(default_factory=list)  # targets, see target_group()
     lines: int = 0
     right: np.ndarray = None  # [G+1, 4] per outer row: s to next observed head, its lane/line, s to editable-run end
@@ -115,7 +126,10 @@ def target_group(g, c0, line_index, copy_list, hold_limit) -> dict:
     return {'t_rel_us': t, 'bin': t // BIN_US, 'residual': t % BIN_US // MS, 'copy': copy, 'notes': notes}
 
 
-def build_core(sample, chart_events, c0: int, audio_duration_us: int, *, line_index=None) -> CoreExample:
+def build_core(sample, chart_events, c0: int, audio_duration_us: int, *, line_index=None, perturb=None) -> CoreExample:
+    """perturb: np.random.Generator (training only) -> the generated context is perturbed (PERTURB) so the
+    model learns to read its own imperfect output; masks, hold limits and the chart stream all see the same
+    perturbed context, and targets that became illegal under it are skipped by the sampler."""
     req, view = sample.request, sample.model_view
     mode = req['mode']
     line_index = line_index_of(chart_events) if line_index is None else line_index
@@ -123,9 +137,14 @@ def build_core(sample, chart_events, c0: int, audio_duration_us: int, *, line_in
     c1, l0, l1 = c0 + CORE_US, c0 - HALO_US, c0 + CORE_US + HALO_US
     observed = [Event.from_json(e) for e in req['observed_events']]
     hidden = list(sample.hidden)
-    # Earlier hidden targets = this request's previously generated events: onset before the core and
-    # occupancy touching the window (a hold that started before the halo but is still active counts).
-    generated = [e for e in hidden if e.onset_us < c0 and max(e.occupancy()[1], e.onset_us + 1) > l0]
+    runs = editable_runs(regions)
+    # Earlier hidden targets = this request's previously generated events (onset before the core). The whole
+    # prefix feeds the song stream; rows see those whose occupancy touches the window (a hold that started
+    # before the halo but is still active counts).
+    generated_all = [e for e in hidden if e.onset_us < c0]
+    if perturb is not None and generated_all:
+        generated_all = perturb_context(generated_all, perturb, runs, c0, mode)
+    generated = [e for e in generated_all if max(e.occupancy()[1], e.onset_us + 1) > l0]
 
     def touches(e):
         a, b = e.occupancy()
@@ -159,7 +178,6 @@ def build_core(sample, chart_events, c0: int, audio_duration_us: int, *, line_in
     allowed = np.array([t in req['controls'].get('allowed_types', MODE_TYPES[mode]) for t in TYPES])
 
     cell_state = np.array([state_at(regions, l0 + k * CELL_US) for k in range(LOCAL_CELLS)], np.int64)
-    runs = editable_runs(regions)
     bin_ok = np.zeros((CORE_BINS, 10), bool)
     for a, b in runs:
         a, b = max(a, c0), min(b, c1)
@@ -169,17 +187,8 @@ def build_core(sample, chart_events, c0: int, audio_duration_us: int, *, line_in
     obs_heads = sorted({e.onset_us for e in observed if c0 <= e.onset_us < c1 and C.contains(runs, e.onset_us)})
     copy_list = [t - c0 for t in obs_heads]
 
-    # 2 s summary over the whole song from KNOWN information only (observed heads, region states).
-    nb = -(-audio_duration_us // BLOCK_US)
-    stats = np.zeros((nb, 6), np.float32)
-    for e in observed:
-        stats[min(e.onset_us // BLOCK_US, nb - 1), TYPES.index(e.type)] += 1
-    stats[:, :4] = np.log1p(stats[:, :4])
-    for k in range(nb):
-        s, t_end = k * BLOCK_US, min((k + 1) * BLOCK_US, audio_duration_us)
-        inter = lambda st: C.length(C.intersect([(s, t_end)], [(r['start_us'], r['end_us']) for r in regions if r['state'] == st]))
-        stats[k, 4] = inter('editable') / max(t_end - s, 1)
-        stats[k, 5] = inter('empty') / max(t_end - s, 1)
+    # whole-song chart stream from KNOWN information only: observed events and the generated prefix
+    grid, cov, counts = song_blocks(observed, generated_all, regions, c0, audio_duration_us, mode)
 
     # Hold end limits: the editable run, and (mania) the next KNOWN head on the same lane (observed events
     # and the generated prefix; never hidden future targets, which generation does not have). Phira holds
@@ -222,7 +231,77 @@ def build_core(sample, chart_events, c0: int, audio_duration_us: int, *, line_in
     for tg, g in zip(groups, targets):
         tg['right_new'] = np.array(right_of(g.time_us - 1), np.float32)
     return CoreExample(MODES.index(mode), c0, (c0 - HALO_US) // CELL_US, known, refs, ctrl, allowed, cell_state,
-                       bin_ok, np.asarray(copy_list, np.int64), stats, groups, len(line_index), right)
+                       bin_ok, np.asarray(copy_list, np.int64), grid, cov, counts, groups, len(line_index), right)
+
+
+def song_blocks(observed, generated, regions, c0: int, duration_us: int, mode: str):
+    """Per 400 ms block of the whole song: occupancy grid [NB, BLOCK_CELLS, 4, 2] (channel = lane for mania,
+    type for Phira; plane 0 = onset in the cell, plane 1 = hold active in the cell), coverage [NB, 3]
+    (fraction of the block before c0, editable fraction, empty fraction) and log1p onset counts by type
+    [NB, 4]. Only observed events and the generated prefix enter (hidden targets never do)."""
+    n_cells = -(-duration_us // CELL_US)
+    nb = -(-n_cells // BLOCK_CELLS)
+    grid = np.zeros((nb, BLOCK_CELLS, 4, 2), np.uint8)
+    counts = np.zeros((nb, 4), np.float32)
+    flat = grid.reshape(nb * BLOCK_CELLS, 4, 2)
+    last = nb * BLOCK_CELLS - 1
+    lanes = mode == 'mania_4k'
+    for e in observed + generated:
+        c = e.onset_us // CELL_US
+        if not 0 <= c <= last:
+            continue
+        ti = TYPES.index(e.type)
+        ch = e.location.lane if lanes and e.location.kind == 'lane' else ti
+        flat[c, ch, 0] = 1
+        counts[c // BLOCK_CELLS, ti] += 1
+        if e.is_hold:
+            c1 = min((e.end_us - 1) // CELL_US, last)
+            if c1 > c:
+                flat[c + 1:c1 + 1, ch, 1] = 1
+    cov = np.zeros((nb, 3), np.float32)
+    starts = np.arange(nb, dtype=np.int64) * STREAM_BLOCK_US
+    ends = np.minimum(starts + STREAM_BLOCK_US, duration_us)
+    length = np.maximum(ends - starts, 1).astype(np.float64)
+    cov[:, 0] = np.clip((c0 - starts) / length, 0, 1)
+    for r in regions:
+        st = STATES.index(r['state'])
+        if st == 1:  # complete: the default state
+            continue
+        ov = np.clip(np.minimum(ends, r['end_us']) - np.maximum(starts, r['start_us']), 0, None)
+        cov[:, 1 if st == 0 else 2] += ov / length
+    return grid, cov, np.log1p(counts)
+
+
+def perturb_context(events, rng, runs, c0: int, mode: str):
+    """Exposure-bias perturbation of the generated context (PERTURB): drops, Gaussian time jitter, lane
+    swaps (mania), hold -> tap flips and inserted taps at random editable times before the core."""
+    out = []
+    for e in events:
+        if rng.random() < PERTURB['drop']:
+            continue
+        j = int(np.clip(rng.normal(0, PERTURB['jitter_us']), -PERTURB['jitter_max_us'], PERTURB['jitter_max_us']))
+        onset = max(0, e.onset_us + j)
+        end = max(onset + 1, e.end_us + j) if e.is_hold else onset
+        loc, typ = e.location, e.type
+        if mode == 'mania_4k' and loc.kind == 'lane' and rng.random() < PERTURB['lane']:
+            loc = LaneLoc(lane=int((loc.lane + rng.integers(1, 4)) % 4))
+        if e.is_hold and rng.random() < PERTURB['hold_to_tap']:
+            typ, end = 'tap', onset
+        out.append(replace(e, onset_us=onset, end_us=end, type=typ, location=loc))
+    pre = [(a, min(b, c0)) for a, b in runs if a < c0]
+    total = sum(b - a for a, b in pre)
+    if total > 0:
+        for i in range(int(rng.binomial(len(events), PERTURB['insert']))):
+            off = int(rng.integers(0, total))
+            for a, b in pre:
+                if off < b - a:
+                    t = a + off
+                    break
+                off -= b - a
+            src = events[int(rng.integers(len(events)))]
+            loc = LaneLoc(lane=int(rng.integers(4))) if mode == 'mania_4k' else src.location
+            out.append(Event(f'perturb:{i}', int(t), int(t), 'tap', loc))
+    return sorted(out, key=lambda e: (e.onset_us, e.event_id))
 
 
 def choose_core(sample, rng, audio_duration_us: int) -> int:

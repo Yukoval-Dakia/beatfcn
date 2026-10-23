@@ -1,0 +1,43 @@
+[
+ {
+  "run_id": "s1-v21",
+  "steps": 12000,
+  "stop_at": 10000,
+  "micro_batch": 8,
+  "accumulation": 4,
+  "workers": 30,
+  "val_cores": 120,
+  "val_songs": 24,
+  "warmup": 500,
+  "validate_every": 1000,
+  "lr": 0.0002,
+  "variant": {
+   "selection": false,
+   "compact_inner": true
+  },
+  "taps_key": "v4_i8_L9-16-24",
+  "taps": [
+   9,
+   16,
+   24
+  ],
+  "pca": "i8_9-16-24",
+  "tap_dim": 1024,
+  "pool_songs": 160,
+  "pool_per_worker": 3,
+  "prefetch": 6,
+  "loaders": 12,
+  "graph": true,
+  "max_graphs": 2,
+  "min_util": 60.0,
+  "check_after_s": 300.0,
+  "manifest_name": "charts.offset-v2-3d99ff6bd5e7.jsonl",
+  "prep": true,
+  "resources": {
+   "gpu": "H100",
+   "cpu": 32.0,
+   "memory": 65536,
+   "timeout": 5400
+  }
+ }
+]
