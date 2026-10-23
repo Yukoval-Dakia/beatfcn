@@ -22,10 +22,11 @@ class _Song:
 
 
 class SongPool:
-    def __init__(self, load_numpy, taps, device='cuda', capacity=160, loaders=4):
+    def __init__(self, load_numpy, taps, device='cuda', capacity=160, loaders=4, mel=True):
         """load_numpy(sha) -> (taps {layer: int8/float array [cells,8,D]}, summary [S,8,D], mel10 [frames,128])."""
         self.load_numpy, self.taps, self.dev = load_numpy, tuple(taps), torch.device(device)
         self.capacity = capacity
+        self.mel = mel  # keep the 10 ms mel resident (S2 only; the v2.1 model reads none)
         self.cuda = self.dev.type == 'cuda'
         self.stream = torch.cuda.Stream() if self.cuda else None
         self.pool = ThreadPoolExecutor(loaders)
@@ -39,7 +40,7 @@ class SongPool:
     def _load(self, sha):
         t0 = time.time()
         taps_np, summary_np, mel_np = self.load_numpy(sha)
-        arrays = [np.asarray(taps_np[l]) for l in self.taps] + [np.asarray(summary_np), np.asarray(mel_np)]
+        arrays = [np.asarray(taps_np[l]) for l in self.taps] + [np.asarray(summary_np)] + ([np.asarray(mel_np)] if self.mel else [])
         host = [torch.from_numpy(a).pin_memory() if self.cuda else torch.from_numpy(a) for a in arrays]
         if self.cuda:
             with torch.cuda.stream(self.stream):
@@ -48,7 +49,8 @@ class SongPool:
                 ev.record(self.stream)
         else:
             dev, ev = host, None
-        song = _Song({l: t for l, t in zip(self.taps, dev[:-2])}, dev[-2], dev[-1], ev, sum(a.nbytes for a in arrays))
+        T = len(self.taps)
+        song = _Song({l: t for l, t in zip(self.taps, dev[:T])}, dev[T], dev[T + 1] if self.mel else None, ev, sum(a.nbytes for a in arrays))
         song._host = host if self.cuda else None  # keep pinned buffers alive until the copies complete
         self.stats['loads'] += 1
         self.stats['bytes'] += song.nbytes

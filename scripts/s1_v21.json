@@ -5,7 +5,7 @@
   "stop_at": 10000,
   "micro_batch": 8,
   "accumulation": 4,
-  "workers": 30,
+  "workers": 24,
   "val_cores": 120,
   "val_songs": 24,
   "warmup": 500,
@@ -24,8 +24,8 @@
   "pca": "i8_9-16-24",
   "tap_dim": 1024,
   "pool_songs": 160,
-  "pool_per_worker": 3,
-  "prefetch": 6,
+  "pool_per_worker": 2,
+  "prefetch": 4,
   "loaders": 12,
   "graph": true,
   "max_graphs": 2,
@@ -37,7 +37,8 @@
    "gpu": "H100",
    "cpu": 32.0,
    "memory": 65536,
-   "timeout": 5400
-  }
+   "timeout": 10800
+  },
+  "max_wall_s": 3600.0
  }
 ]

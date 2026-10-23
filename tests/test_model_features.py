@@ -88,6 +88,26 @@ class PoolTests(unittest.TestCase):
 
 
 class SamplerRejectsOversizedGroups(unittest.TestCase):
+    def test_sub_millisecond_neighbours_are_rejected(self):
+        """Targets live on a 1 ms grid and the pointer mask is ms-strict: two groups inside one millisecond
+        (Phira fractional-us charts) must be skipped by check_targets, not counted as illegal targets."""
+        from beatfcn.events.requests import build_request
+        from events_helpers import synthetic_mania, DURATION
+        chart = synthetic_mania(0)
+        for k in range(40):
+            try:
+                s = build_request(chart, kind='from_scratch', seed=500 + k, audio_id='a', audio_duration_us=DURATION)
+                ex = F.build_core(s, chart.events, F.choose_core(s, np.random.default_rng(k), DURATION), DURATION)
+            except (ValueError, AssertionError):
+                continue
+            if len(ex.groups) >= 2:
+                break
+        else:
+            self.fail('no example with two groups')
+        self.assertEqual(F.check_targets(ex), [])
+        ex.groups[1]['t_rel_us'] = ex.groups[0]['t_rel_us'] + 1  # 1 us later: same millisecond
+        self.assertIn('time_same_ms', F.check_targets(ex))
+
     def test_fixed_by_song_groups_validation_cores_by_song(self):
         from beatfcn.train.loop import CoreSampler
         from events_helpers import synthetic_mania, DURATION

@@ -162,6 +162,12 @@ class Layer(nn.Module):
         return self.finish(x_new, att)
 
 
+def _ms_floor(t_s):
+    """Seconds (float32, exact microseconds) -> whole milliseconds, floored, as float: round to us first so
+    7.999999 s is 7999 ms, not 7998 (float32 7.9999990463) nor 8000 (round)."""
+    return torch.div((t_s.double() * 1e6).round(), 1000, rounding_mode='floor').float()
+
+
 def onehot(x, n):
     """F.one_hot without its host-side range check (a device sync); inputs are clamped / validated upstream."""
     return x[..., None] == torch.arange(n, device=x.device)
@@ -210,7 +216,8 @@ def _mix_cells(c, dt):
     acc = c[0].to(dt)
     for t in range(1, c.shape[0]):
         acc = acc + c[t].to(dt)
-    return (acc / c.shape[0]).reshape(-1, c.shape[-1])
+    scale = c.shape[0] * (32.0 if c.dtype == torch.int8 else 1.0)  # int8 quantised units ~N(0, 32): standardise
+    return (acc / scale).reshape(-1, c.shape[-1])
 
 
 class Int8MixProj(torch.autograd.Function):
@@ -660,7 +667,7 @@ class P1Model(nn.Module):
         core_cells = ptr_audio[:, h0c:h0c + CORE_CELLS]  # [B,200,8,P]
         band = torch.einsum('byp,bcnp->bycn', qa, core_cells) / math.sqrt(P)
         cell_score = torch.logsumexp(band.float(), -1)  # [B,Ny,200]
-        prev_ms = (t_prev * 1000).round()  # [B,Ny] ms from core start (BOS: -1)
+        prev_ms = _ms_floor(t_prev)  # [B,Ny] ms from core start (BOS: -1); floor like the collated targets
         cell_ms = torch.arange(CORE_CELLS, device=dev) * MS_PER_CELL + MS_PER_CELL // 2
         delta = (cell_ms[None, None] - prev_ms[..., None]).clamp(min=0)
         bucket = (torch.log2(delta / 10 + 1) * 6).long().clamp(max=63)
@@ -677,7 +684,7 @@ class P1Model(nn.Module):
         ok = bt['bin_ok'].reshape(B, CORE_CELLS, MS_PER_CELL)[:, None] & (ms[None, None] > prev_ms[..., None, None])  # [B,Ny,200,40]
         cell_mask = ok.any(-1)
         # COPY_TIME anchors
-        a_ms = (bt['copy_t'] * 1000).round()
+        a_ms = _ms_floor(bt['copy_t'])
         a_cell = (h0c + (a_ms / MS_PER_CELL).long().clamp(0, CORE_CELLS - 1))
         a_audio = ptr_audio.mean(2).gather(1, a_cell[..., None].expand(-1, -1, P))
         copy_logits = (torch.einsum('byp,bap->bya', qc, self.copy_key(a_audio)) / math.sqrt(P)).float()

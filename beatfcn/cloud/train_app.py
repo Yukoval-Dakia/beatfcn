@@ -227,7 +227,7 @@ def prep_train(taps_key: str, taps: tuple, pca: str = '', whiten: bool = False, 
     from beatfcn.train.loop import CoreSampler
     t0 = time.time()
     train_rows, val_rows, info = _select_rows(taps_key, taps, pca, whiten, songs_file, max_train_songs, val_songs_file, manifest_name)
-    key = _prep_key(taps_key=taps_key, taps=list(taps), pca=pca, whiten=whiten, songs_file=songs_file,
+    key = _prep_key(schema='core-v2.1', taps_key=taps_key, taps=list(taps), pca=pca, whiten=whiten, songs_file=songs_file,
                     max_train_songs=max_train_songs, val_songs_file=val_songs_file, val_cores=val_cores, audit=audit,
                     rows_sha256=info['rows_sha256'], **({'val_songs': val_songs} if val_songs else {}))
     path = f'{DATA}/prep/{key}.pt'
@@ -257,7 +257,7 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
           pca: str = '', cf_force: bool = False, stop_at: int = 0, whiten: bool = False, also: list | None = None,
           device: str = 'cuda', min_util: float = 0.0, check_after_s: float = 120.0, prep: str = '',
           pool_songs: int = 160, prefetch: int = 6, graph: bool = False, manifest_name: str = 'charts.jsonl',
-          pool_per_worker: int = POOL, max_graphs: int = 2, val_songs: int = 0, loaders: int = 8):
+          pool_per_worker: int = POOL, max_graphs: int = 2, val_songs: int = 0, loaders: int = 8, max_wall_s: float = 0.0):
     """stop_at: pause at this step (checkpointed) while the LR schedule still spans `steps`; a later call
     with the same run_id resumes from last.pt (S1 compares both variants at stop_at, then extends the winner).
 
@@ -332,7 +332,7 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
     if pool_songs < need:
         log_all({'event': 'pool_capacity', 'requested': pool_songs, 'raised_to': need, 'workers': workers, 'modes': n_modes, 'per_worker': pool_per_worker})
         pool_songs = need
-    pool = SongPool(corpus.load_numpy, tuple(taps), device, capacity=pool_songs, loaders=loaders)
+    pool = SongPool(corpus.load_numpy, tuple(taps), device, capacity=pool_songs, loaders=loaders, mel=False)  # v2.1 reads no mel
     scale_dev = None  # per-tap int8 scales once on the device: no per-batch host->device copy in attach_audio
     if corpus.quant:
         scale_dev = torch.stack([torch.broadcast_to(torch.as_tensor(np.asarray(corpus.scale[l], np.float32)), (corpus.tap_dim,))
@@ -505,6 +505,11 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
                 r.log({'event': 'train', **shared, 'grad_norm': float(r.gn), 'fields': summarize(r.acc)})
                 r.acc = {}
             u = shared['gpu_util']
+            if max_wall_s and time.time() - t_loop >= max_wall_s:  # cost cap: stop (resumable) instead of overrunning
+                aborted = f'wall clock {max_wall_s:.0f} s reached at step {step + 1}'
+                log_all({'event': 'aborted', 'reason': aborted, 'step': step + 1})
+                checkpoint(step + 1)
+                break
             if min_util and u is not None and time.time() - t_loop >= check_after_s and u < min_util:
                 aborted = f'GPU util {u}% < {min_util}% at step {step + 1}'
                 log_all({'event': 'aborted', 'reason': aborted, 'step': step + 1})

@@ -102,7 +102,7 @@ class P1Tests(unittest.TestCase):
         cells = torch.randint(-100, 100, (2, 3, 40, 8, 16), dtype=torch.int8)
         W = torch.randn(16, 12, requires_grad=True)
         out = Int8MixProj.apply(cells, W)
-        ref = (cells.float().mean(1).reshape(2, -1, 16) @ W)
+        ref = ((cells.float().mean(1) / 32.0).reshape(2, -1, 16) @ W)  # int8 units are standardised by 32
         torch.testing.assert_close(out, ref, atol=1e-4, rtol=1e-4)
         g = torch.randn_like(out)
         (out * g).sum().backward()

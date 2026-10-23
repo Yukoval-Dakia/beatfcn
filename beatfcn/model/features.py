@@ -36,7 +36,7 @@ MAX_SUMMARY = 600
 BLOCK_CELLS = 10  # whole-song stream block: 400 ms of song cells (FIRST_CANDIDATE v2.1 §3.2)
 STREAM_BLOCK_US = BLOCK_CELLS * CELL_US
 STREAM_STRIDE = 2  # the block encoder reads every other cell (80 ms) of the last two taps: static memory x4 smaller
-MAX_STREAM_CELLS = 16000  # the song stream sees at most 10.7 min of song cells (a window centred on the core beyond)
+MAX_STREAM_CELLS = 12000  # the song stream sees at most 8 min of song cells (a window centred on the core beyond)
 # context perturbation (exposure bias, v2.1 §3.3): applied to the GENERATED context only, never to observed events
 PERTURB = {'drop': 0.10, 'jitter_us': 8_000, 'jitter_max_us': 25_000, 'lane': 0.03, 'hold_to_tap': 0.02, 'insert': 0.05}
 MODES = ('mania_4k', 'phira')
@@ -331,6 +331,8 @@ def check_targets(ex: CoreExample) -> list[str]:
         t = g['t_rel_us']
         if t <= prev:
             bad.append('time_not_increasing')
+        if prev >= 0 and t // MS <= prev // MS:  # the model places onsets on a 1 ms grid, strictly increasing
+            bad.append('time_same_ms')
         prev = t
         if g['copy'] >= 0:
             if int(ex.copy_times[g['copy']]) != t:

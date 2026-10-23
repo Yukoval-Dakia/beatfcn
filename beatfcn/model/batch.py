@@ -62,7 +62,7 @@ TIERS = [  # micro-batch 8, from 1000 random 8-core batches of the validation co
     # 40 ms song cells; stored at STREAM_STRIDE) 8000 = 5.3 min covers most songs, longer ones are windowed.
     {'G': 192, 'K': 256, 'R': 256, 'A': 16, 'H': 320, 'C': 8000},
     {'G': 256, 'K': 384, 'R': 256, 'A': 32, 'H': 640, 'C': 12000},
-    {'G': 320, 'K': 512, 'R': 256, 'A': 32, 'H': 1024, 'C': 16000},
+    {'G': 320, 'K': 512, 'R': 256, 'A': 32, 'H': 1024, 'C': 12000},  # C never selects tier 2 (its slots are eager)
 ]
 # which padded axis each batch key grows along (everything else has a fixed shape per micro-batch size)
 AXIS = {**{k: ('G', 1) for k in ('grp_valid', 'grp_t', 'grp_cell', 'grp_off', 'grp_copy', 'grp_n', 'busy', 'right_new',
@@ -244,7 +244,7 @@ def collate_meta(examples: list[F.CoreExample], infos: list[SongInfo], taps: tup
         out['cell_sel'][b] = lab
         # rhythm context per Y row: the most recent onsets among known onsets BEFORE the core and the earlier
         # targets (never a later target; v2.1 §3.3 item 3), most recent first
-        hist = sorted(float(t) for t in ex.known[:, 0] if t < 0)
+        hist = sorted({float(t) for t in ex.known[:, 0] if t < 0})  # distinct onsets (chords share a time)
         for i in range(len(ex.groups) + 1):
             recent = hist[-PREV_ONSETS:][::-1]
             if recent:
