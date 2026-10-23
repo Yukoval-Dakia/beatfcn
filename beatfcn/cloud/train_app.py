@@ -1136,7 +1136,7 @@ def bench_graph(batches: str = 'bench/meta_static_v4.pt', tap_dim: int = 1024, s
         for i in range(2 if paired else 1):
             torch.manual_seed(seed)
             extra = {} if dropout is None else {'dropout': dropout}
-            mc = P1Config(taps=taps, top_tap=max(taps), tap_dim=tap_dim, **{'packed': False, **(variant or {}), **extra, 'selection': bool(i)})
+            mc = P1Config(taps=taps, top_tap=max(taps), tap_dim=tap_dim, **{**(variant or {}), **extra, 'selection': bool(i)})
             m = P1Model(mc).to(dev)
             lr = torch.tensor(1e-4, device=dev) if graph else 1e-4
             runs.append(Run(m, torch.optim.AdamW(m.parameters(), lr=lr, fused=True, capturable=graph)))
