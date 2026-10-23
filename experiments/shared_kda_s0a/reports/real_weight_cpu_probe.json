@@ -1,0 +1,152 @@
+{
+  "scope": "S0a full-size shared numerical probe, synthetic event/condition features, NOT S0b training",
+  "torch": "2.6.0+cpu",
+  "python": "3.12.14",
+  "device": "cpu",
+  "backend": "reference",
+  "mel_frames": 4,
+  "previous_groups": 2,
+  "steps": 1,
+  "gpu_measured": false,
+  "cuda_peak_allocated": null,
+  "cuda_peak_reserved": null,
+  "checkpoint_sha256": "6a97605541ba9d3680f6758e2ae19019736f03e5db14e8bbfbd71746b19304f4",
+  "checkpoint_sha256_verified": true,
+  "inventory": {
+    "identity": "shared-pupu24-kda4-s0-v1",
+    "modules": {
+      "intent": {
+        "total": 8192,
+        "trainable": 8192,
+        "frozen": 0
+      },
+      "bos": {
+        "total": 1024,
+        "trainable": 1024,
+        "frozen": 0
+      },
+      "backbone": {
+        "total": 403141632,
+        "trainable": 0,
+        "frozen": 403141632
+      },
+      "kda_blocks.0": {
+        "total": 17328264,
+        "trainable": 17328264,
+        "frozen": 0
+      },
+      "kda_blocks.1": {
+        "total": 17328264,
+        "trainable": 17328264,
+        "frozen": 0
+      },
+      "kda_blocks.2": {
+        "total": 17328264,
+        "trainable": 17328264,
+        "frozen": 0
+      },
+      "kda_blocks.3": {
+        "total": 17328264,
+        "trainable": 17328264,
+        "frozen": 0
+      },
+      "group_embed": {
+        "total": 1058816,
+        "trainable": 1058816,
+        "frozen": 0
+      },
+      "reference_embed": {
+        "total": 9216,
+        "trainable": 9216,
+        "frozen": 0
+      },
+      "known_embed": {
+        "total": 9216,
+        "trainable": 9216,
+        "frozen": 0
+      },
+      "modality": {
+        "total": 5120,
+        "trainable": 5120,
+        "frozen": 0
+      },
+      "event_position": {
+        "total": 263168,
+        "trainable": 263168,
+        "frozen": 0
+      },
+      "outer_action": {
+        "total": 2050,
+        "trainable": 2050,
+        "frozen": 0
+      },
+      "time_coarse": {
+        "total": 820000,
+        "trainable": 820000,
+        "frozen": 0
+      },
+      "time_fine": {
+        "total": 10250,
+        "trainable": 10250,
+        "frozen": 0
+      },
+      "selection_query": {
+        "total": 1048576,
+        "trainable": 1048576,
+        "frozen": 0
+      },
+      "selection_key": {
+        "total": 1048576,
+        "trainable": 1048576,
+        "frozen": 0
+      },
+      "selection_readout": {
+        "total": 1025,
+        "trainable": 1025,
+        "frozen": 0
+      }
+    },
+    "total": 476739917,
+    "trainable": 73598285,
+    "frozen": 403141632,
+    "bf16_weight_bytes": 953479834,
+    "fp32_weight_bytes": 1906959668
+  },
+  "loaded_tensors": 294,
+  "load_seconds": 3.0675796499999706,
+  "audio_sha256": "da44de2c36636c54fde78da5724fb710c72c2bf2754c077503688f3603df062a",
+  "audio_offset_seconds": 15,
+  "audio_scope": "real local excerpt, synthetic all event/condition features; rights not established for training",
+  "iterations": [
+    {
+      "loss": 6.827447891235352,
+      "forward_backward_seconds": 1.1915635619998284,
+      "gradient_l2": {
+        "intent": 0.5184968675465442,
+        "bos": 0.3531508908865595,
+        "kda_blocks.0": 40.99556435221171,
+        "kda_blocks.1": 36.494388383929525,
+        "kda_blocks.2": 51.27280444894619,
+        "kda_blocks.3": 57.82646682419361,
+        "group_embed": 12.358657303069226,
+        "reference_embed": 1.4929483780601336,
+        "known_embed": 1.0385714926816156,
+        "modality": 1.58286781327358,
+        "event_position": 1.0471227551978446,
+        "outer_action": 96.96312051869337,
+        "time_coarse": 7.178034706644425,
+        "time_fine": 70.28272471867353,
+        "selection_query": 1.768724202753121,
+        "selection_key": 1.798004259942496,
+        "selection_readout": 163.56331498172963
+      },
+      "new_weight_changed": true,
+      "missing_gradients": [],
+      "nonfinite_gradients": [],
+      "frozen_gradients": []
+    }
+  ],
+  "frozen_sample_values_unchanged": true,
+  "cpu_peak_rss_bytes": 2701148160,
+  "total_seconds": 4.583413942000334
+}

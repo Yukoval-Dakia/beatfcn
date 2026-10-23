@@ -1,0 +1,7 @@
+# First-candidate main line (beatfcn/). Local CPU/MPS environment; GPU image pins live in beatfcn/modal_app.py.
+torch==2.6.0
+numpy==2.2.6
+safetensors==0.5.3
+jsonschema==4.26.0
+pyyaml==6.0.3
+modal[api-proxy-support]==1.6.2

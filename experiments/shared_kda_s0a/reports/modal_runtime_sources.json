@@ -1,0 +1,77 @@
+{
+  "checked_date_utc": "2026-10-22",
+  "status": "official metadata and local SDK inspection; GPU runtime untested",
+  "runtime": {
+    "python": "3.12",
+    "torch": "2.7.1+cu126",
+    "triton": "3.3.1",
+    "fla-core": "0.5.2",
+    "einops": "0.8.1",
+    "numpy": "2.2.6",
+    "safetensors": "0.5.3",
+    "modal": "1.6.2"
+  },
+  "sources": [
+    {
+      "url": "https://pytorch.org/get-started/previous-versions/",
+      "supports": "Official PyTorch2.7.1 CUDA12.6 pip index and supported exact version."
+    },
+    {
+      "url": "https://pypi.org/pypi/torch/2.7.1/json",
+      "supports": "Linux x86_64 dependency triton==3.3.1 and CUDA12.6 NVIDIA component pins."
+    },
+    {
+      "url": "https://pypi.org/pypi/triton/3.3.1/json",
+      "supports": "Exact official registry release exists; compatible Python3.12 wheel."
+    },
+    {
+      "url": "https://pypi.org/pypi/fla-core/0.5.2/json",
+      "supports": "FLA>=Torch2.7/Triton3.3 CUDA extras; einops dependency; exact pinned wheel digest in reports/fla_pin.json."
+    },
+    {
+      "url": "https://pypi.org/pypi/einops/0.8.1/json",
+      "supports": "Exact release, Python>=3.8, no runtime dependencies."
+    },
+    {
+      "url": "https://pypi.org/pypi/numpy/2.2.6/json",
+      "supports": "Exact release, Python>=3.10."
+    },
+    {
+      "url": "https://pypi.org/pypi/safetensors/0.5.3/json",
+      "supports": "Exact release supports Python3.12."
+    },
+    {
+      "url": "https://modal.com/pricing",
+      "supports": "L40S0.000542USD/s; CPU0.0000131USD/core/s; RAM0.00000222USD/GiB/s; volume0.09USD/GiB/month; egress0.04USD/GiB before applicable allowance."
+    },
+    {
+      "url": "https://modal.com/docs/guide/budgets",
+      "supports": "Workspace gross cap is before credits; net spend limit is separate; environment budgets exclude some workspace charges."
+    },
+    {
+      "url": "https://modal.com/docs/guide/billing",
+      "supports": "Billing scope and delayed billing data; no claim that a client timeout is a billing cap."
+    },
+    {
+      "url": "https://modal.com/docs/guide/timeouts",
+      "supports": "Function execution and startup timeouts are distinct."
+    },
+    {
+      "url": "https://modal.com/docs/guide/resources",
+      "supports": "CPU and memory requests versus hard limits and actual-usage billing."
+    },
+    {
+      "url": "https://modal.com/docs/guide/volumes",
+      "supports": "Private volumes, explicit batch upload, commit, read and cleanup."
+    }
+  ],
+  "fla_wheel_sha256": "5e830c85bad3d0d34677f98ac7074d08687a3756f0f0499d95ceb96eb6920761",
+  "fla_kda_chunk_source_sha256": "a15aa6ac257af5c8f7a1d6afc21a417391568e90a8898d4e228ddeb48cb0e9b8",
+  "nonclaims": [
+    "No runtime installation performed locally by this preparation",
+    "No GPU parity or memory measurement",
+    "No remote launch",
+    "Not a fully hashed transitive/OS lockfile",
+    "No hard $1 account cap claim; this bounded experiment permits a $2 gross ceiling with a $1 target and $0 card charges."
+  ]
+}

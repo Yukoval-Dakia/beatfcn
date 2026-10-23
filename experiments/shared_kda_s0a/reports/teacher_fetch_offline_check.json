@@ -1,0 +1,8 @@
+{
+  "status": "passed",
+  "network_used": false,
+  "subset_header_exact_match": true,
+  "expected_total_bytes": 1612597160,
+  "tensor_count": 294,
+  "publisher_header_sha256": "da063fe4084de51540b056278e5b1ca6d21fe51eac6af3b3a015bdb2dc95b5b0"
+}

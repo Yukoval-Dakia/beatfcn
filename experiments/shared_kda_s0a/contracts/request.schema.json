@@ -1,0 +1,500 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:beatfcn:completion-request:v1",
+  "title": "BeatFCN addition-only completion request",
+  "description": "Design contract. Semantic checks listed in README are mandatory beyond JSON Schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "audio_id",
+    "audio_duration_us",
+    "mode",
+    "observed_events",
+    "regions",
+    "references",
+    "controls"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "beatfcn.intent.v1"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "audio_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "audio_duration_us": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "mode": {
+      "enum": [
+        "mania_4k",
+        "phira"
+      ]
+    },
+    "observed_events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/observed_event"
+      }
+    },
+    "regions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/region"
+      }
+    },
+    "references": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/reference"
+      }
+    },
+    "controls": {
+      "$ref": "#/$defs/controls"
+    },
+    "timing_map_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scene_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "hard_profile_ref": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Versioned formal input/reachability profile, required for two-finger certification."
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "requested_candidates": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 8
+    }
+  },
+  "$defs": {
+    "time": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Microseconds from canonical audio start; native fields are preserved in sidecars."
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start_us",
+        "end_us"
+      ],
+      "properties": {
+        "start_us": {
+          "$ref": "#/$defs/time"
+        },
+        "end_us": {
+          "$ref": "#/$defs/time"
+        }
+      }
+    },
+    "location": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "lane"
+          ],
+          "properties": {
+            "kind": {
+              "const": "lane"
+            },
+            "lane": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "line_id",
+            "side",
+            "native_x"
+          ],
+          "properties": {
+            "kind": {
+              "const": "line"
+            },
+            "line_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "side": {
+              "enum": [
+                "above",
+                "below"
+              ]
+            },
+            "native_x": {
+              "type": "number"
+            }
+          }
+        }
+      ]
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "onset_us",
+        "end_us",
+        "type",
+        "location"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "onset_us": {
+          "$ref": "#/$defs/time"
+        },
+        "end_us": {
+          "$ref": "#/$defs/time"
+        },
+        "type": {
+          "enum": [
+            "tap",
+            "hold",
+            "flick",
+            "drag"
+          ]
+        },
+        "location": {
+          "$ref": "#/$defs/location"
+        },
+        "native_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "native_beat_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fake": {
+          "const": false
+        },
+        "locked": {
+          "type": "boolean"
+        }
+      }
+    },
+    "observed_event": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/event"
+        },
+        {
+          "type": "object",
+          "required": [
+            "locked",
+            "native_ref"
+          ],
+          "properties": {
+            "locked": {
+              "const": true
+            },
+            "native_ref": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "region_id",
+        "start_us",
+        "end_us",
+        "state"
+      ],
+      "properties": {
+        "region_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "start_us": {
+          "$ref": "#/$defs/time"
+        },
+        "end_us": {
+          "$ref": "#/$defs/time"
+        },
+        "state": {
+          "enum": [
+            "editable",
+            "complete",
+            "empty"
+          ]
+        }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reference_id",
+        "audio_id",
+        "mode",
+        "span",
+        "coverage",
+        "events"
+      ],
+      "properties": {
+        "reference_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "audio_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "enum": [
+            "mania_4k",
+            "phira"
+          ]
+        },
+        "span": {
+          "$ref": "#/$defs/span"
+        },
+        "coverage": {
+          "enum": [
+            "complete",
+            "sparse"
+          ],
+          "description": "Only complete coverage licenses unselected evidence."
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/event"
+          }
+        },
+        "scene_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "native_chart_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "nonnegative_band": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "number",
+        "minimum": 0
+      },
+      "description": "Ordered [low, high]; semantic validator checks low <= high."
+    },
+    "probability_band": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      }
+    },
+    "controls": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "difficulty_label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "density_notes_per_second": {
+          "$ref": "#/$defs/nonnegative_band"
+        },
+        "peak_notes_per_second": {
+          "$ref": "#/$defs/nonnegative_band"
+        },
+        "hold_head_ratio": {
+          "$ref": "#/$defs/probability_band"
+        },
+        "hold_occupancy_ratio": {
+          "$ref": "#/$defs/probability_band"
+        },
+        "chord_ratio": {
+          "$ref": "#/$defs/probability_band"
+        },
+        "jack_ratio": {
+          "$ref": "#/$defs/probability_band"
+        },
+        "flick_ratio": {
+          "$ref": "#/$defs/probability_band"
+        },
+        "drag_ratio": {
+          "$ref": "#/$defs/probability_band"
+        },
+        "reference_strength": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "allowed_types": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "tap",
+              "hold",
+              "flick",
+              "drag"
+            ]
+          }
+        },
+        "max_active_contacts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "intensity_curve": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "time_us",
+              "value"
+            ],
+            "properties": {
+              "time_us": {
+                "$ref": "#/$defs/time"
+              },
+              "value": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "mania_4k"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "observed_events": {
+            "items": {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "tap",
+                    "hold"
+                  ]
+                },
+                "location": {
+                  "properties": {
+                    "kind": {
+                      "const": "lane"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "phira"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "then": {
+        "required": [
+          "scene_ref"
+        ],
+        "properties": {
+          "scene_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "observed_events": {
+            "items": {
+              "properties": {
+                "location": {
+                  "properties": {
+                    "kind": {
+                      "const": "line"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

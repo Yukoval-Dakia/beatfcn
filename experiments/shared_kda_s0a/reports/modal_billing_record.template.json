@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "operator_launch_clearance": false,
+  "account_read_check_completed": false,
+  "account_checked_at_unix": null,
+  "remaining_credits_usd": null,
+  "gross_usage_so_far_usd": null,
+  "workspace_usage_cap_usd": null,
+  "net_spend_limit_usd": null,
+  "cap_scope": "workspace_all_usage_before_credits",
+  "credits_evidence": "Fill from a current read-only account inspection; no credentials.",
+  "limit_evidence": "Record current workspace gross and net limits and the non-secret evidence source; no account changes are implied.",
+  "limit_evidence_status": "provider_verified",
+  "other_workloads_accounted_for": false,
+  "notes": "Template deliberately blocked until a fresh account check and explicit operator clearance. This experiment permits <=$2 gross usage, targets <=$1, and permits $0 card charges."
+}

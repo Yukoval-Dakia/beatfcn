@@ -1,0 +1,2 @@
+# Keep synthetic chart bytes exact (CRLF round-trip tests).
+* -text

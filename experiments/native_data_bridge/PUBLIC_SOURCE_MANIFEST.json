@@ -1,0 +1,49 @@
+{
+  "scope": "Public source, documentation and sanitized technical test evidence only; no private data or credentials.",
+  "files": {
+    ".gitignore": {
+      "sha256": "a8f50091531a7150f0e1c1545ee85e4ce52ca82d6cb89377398af13e6d47d05d",
+      "bytes": 244
+    },
+    "README.md": {
+      "sha256": "ce0989c9733c365bea88854950e1bbcda03a279d2ec9316aaa59e37fbc444a0e",
+      "bytes": 9285
+    },
+    "STATUS.json": {
+      "sha256": "fea43905b8681e6195f7cf23218ce193a8f166d9aa2194c261a87f309f14f3a5",
+      "bytes": 588
+    },
+    "beatfcn_data/__init__.py": {
+      "sha256": "40f9b8acc9cc6b5ee20b95caa1f09678ed43f4ab2bdcec91b27178238ac31d98",
+      "bytes": 331
+    },
+    "beatfcn_data/__main__.py": {
+      "sha256": "354dbd8b803ae0b2ce936b572675a8bd6f6b036295c737f92d559d28e6a7f69d",
+      "bytes": 1442
+    },
+    "beatfcn_data/bridge.py": {
+      "sha256": "3ae95e93d665455a3afd9a7ca7b23efc491568d98f0a5801bedac02625b93309",
+      "bytes": 42771
+    },
+    "contracts/request.schema.json": {
+      "sha256": "4692379c94e4e84de365d0e8dc52fb42f792ea0d004d408ec3d4391405ea2175",
+      "bytes": 10396
+    },
+    "pyproject.toml": {
+      "sha256": "646d7aa03f496caaec474486ba4abc70bc8188f3ebdac26bb4e6bb04ce78ae60",
+      "bytes": 282
+    },
+    "reports/private_fixture_tests.txt": {
+      "sha256": "ac8ee9417806880b7d159340acf952dc8a3a6d37c20fb38e107657af855db099",
+      "bytes": 4078
+    },
+    "reports/public_unit_tests.txt": {
+      "sha256": "39362b6670e20376d0887fe89937c39eb5b2ea4fe4eb4141d230f22852a29b17",
+      "bytes": 4740
+    },
+    "tests/test_bridge.py": {
+      "sha256": "e2aaefcee74b9b210475894a6448e16b703fd5ebb484f857617a2c662403c63b",
+      "bytes": 19144
+    }
+  }
+}

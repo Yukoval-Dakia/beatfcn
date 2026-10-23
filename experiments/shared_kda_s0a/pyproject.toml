@@ -1,0 +1,11 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "beatfcn-shared-kda-s0"
+version = "0.1.0"
+description = "Bounded S0a shared Pupu24 plus four full KDA blocks; not chart generation product"
+requires-python = ">=3.11"
+dependencies = ["torch>=2.6", "numpy>=2", "safetensors>=0.5"]
+[tool.setuptools]
+packages = ["beatfcn_s0"]

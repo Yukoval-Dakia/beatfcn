@@ -1,0 +1,21 @@
+{
+  "stage": "experimental_data_prototype_not_integrated",
+  "local_tests_passed_before_relocation_helper": 30,
+  "independent_review": "pending",
+  "private_data_included": false,
+  "audio_included": false,
+  "original_charts_included": false,
+  "public_source_tests": {
+    "collected": 30,
+    "passed": 17,
+    "skipped_private_fixture_tests": 13
+  },
+  "relocated_private_fixture_tests": {
+    "passed": 30,
+    "skipped": 0,
+    "schema_check_included": true
+  },
+  "source_root_relocation_smoke": "passed",
+  "model_integration": "not_implemented",
+  "training_performed": false
+}

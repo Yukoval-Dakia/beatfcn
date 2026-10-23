@@ -1,0 +1,148 @@
+{
+  "schema_version": "beatfcn.intent.v1",
+  "request_id": "synthetic-example-not-a-real-chart",
+  "audio_id": "demo-audio",
+  "audio_duration_us": 30000000,
+  "mode": "mania_4k",
+  "observed_events": [
+    {
+      "event_id": "human-1",
+      "onset_us": 1000000,
+      "end_us": 1000000,
+      "type": "tap",
+      "location": {
+        "kind": "lane",
+        "lane": 0
+      },
+      "native_ref": "demo.osu#human-1",
+      "locked": true,
+      "fake": false
+    },
+    {
+      "event_id": "human-2",
+      "onset_us": 3000000,
+      "end_us": 3000000,
+      "type": "tap",
+      "location": {
+        "kind": "lane",
+        "lane": 2
+      },
+      "native_ref": "demo.osu#human-2",
+      "locked": true,
+      "fake": false
+    },
+    {
+      "event_id": "human-3",
+      "onset_us": 7000000,
+      "end_us": 9200000,
+      "type": "hold",
+      "location": {
+        "kind": "lane",
+        "lane": 1
+      },
+      "native_ref": "demo.osu#human-3",
+      "locked": true,
+      "fake": false
+    },
+    {
+      "event_id": "human-4",
+      "onset_us": 19000000,
+      "end_us": 19000000,
+      "type": "tap",
+      "location": {
+        "kind": "lane",
+        "lane": 3
+      },
+      "native_ref": "demo.osu#human-4",
+      "locked": true,
+      "fake": false
+    }
+  ],
+  "regions": [
+    {
+      "region_id": "done-left",
+      "start_us": 0,
+      "end_us": 8000000,
+      "state": "complete"
+    },
+    {
+      "region_id": "work",
+      "start_us": 8000000,
+      "end_us": 16000000,
+      "state": "editable"
+    },
+    {
+      "region_id": "intentional-rest",
+      "start_us": 16000000,
+      "end_us": 18000000,
+      "state": "empty"
+    },
+    {
+      "region_id": "done-right",
+      "start_us": 18000000,
+      "end_us": 30000000,
+      "state": "complete"
+    }
+  ],
+  "references": [
+    {
+      "reference_id": "example-choice",
+      "audio_id": "demo-audio",
+      "mode": "mania_4k",
+      "span": {
+        "start_us": 0,
+        "end_us": 4000000
+      },
+      "coverage": "complete",
+      "events": [
+        {
+          "event_id": "human-1",
+          "onset_us": 1000000,
+          "end_us": 1000000,
+          "type": "tap",
+          "location": {
+            "kind": "lane",
+            "lane": 0
+          },
+          "native_ref": "demo.osu#human-1",
+          "locked": true,
+          "fake": false
+        },
+        {
+          "event_id": "human-2",
+          "onset_us": 3000000,
+          "end_us": 3000000,
+          "type": "tap",
+          "location": {
+            "kind": "lane",
+            "lane": 2
+          },
+          "native_ref": "demo.osu#human-2",
+          "locked": true,
+          "fake": false
+        }
+      ],
+      "native_chart_ref": "demo.osu"
+    }
+  ],
+  "controls": {
+    "density_notes_per_second": [
+      2,
+      4
+    ],
+    "hold_head_ratio": [
+      0.1,
+      0.3
+    ],
+    "reference_strength": 0.8,
+    "allowed_types": [
+      "tap",
+      "hold"
+    ]
+  },
+  "timing_map_ref": null,
+  "scene_ref": null,
+  "hard_profile_ref": "mania-4k-v1",
+  "seed": 20261022,
+  "requested_candidates": 1
+}

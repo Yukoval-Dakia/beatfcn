@@ -1,0 +1,54 @@
+test_missing_or_extra_keys_rejected (test_loading.LoadingTests.test_missing_or_extra_keys_rejected) ... ok
+test_toy_state_roundtrip_exact (test_loading.LoadingTests.test_toy_state_roundtrip_exact) ... ok
+test_allowlist_no_workspace_auth_or_weights (test_modal_launcher.LauncherContract.test_allowlist_no_workspace_auth_or_weights) ... ok
+test_billing_requires_fresh_full_scope_evidence (test_modal_launcher.LauncherContract.test_billing_requires_fresh_full_scope_evidence) ... ok
+test_exact_compute_limits (test_modal_launcher.LauncherContract.test_exact_compute_limits) ... ok
+test_expired_process_does_not_start (test_modal_launcher.LauncherContract.test_expired_process_does_not_start) ... ok
+test_explicit_permissions_precede_sdk (test_modal_launcher.LauncherContract.test_explicit_permissions_precede_sdk) ... usage: python -m unittest [-h] [--run-id RUN_ID] [--state STATE]
+                          [--asset-manifest ASSET_MANIFEST]
+                          [--billing-record BILLING_RECORD]
+                          [--candidate CANDIDATE] [--audio AUDIO]
+                          [--checkpoint CHECKPOINT] [--output-dir OUTPUT_DIR]
+                          [--approved-upload] [--approved-compute]
+                          [--approved-cleanup]
+                          [{plan,create-manifest,upload-assets,prepare,probe,retrieve,cleanup}]
+python -m unittest: error: Remote stages require explicit --approved-upload for allowlisted files
+usage: python -m unittest [-h] [--run-id RUN_ID] [--state STATE]
+                          [--asset-manifest ASSET_MANIFEST]
+                          [--billing-record BILLING_RECORD]
+                          [--candidate CANDIDATE] [--audio AUDIO]
+                          [--checkpoint CHECKPOINT] [--output-dir OUTPUT_DIR]
+                          [--approved-upload] [--approved-compute]
+                          [--approved-cleanup]
+                          [{plan,create-manifest,upload-assets,prepare,probe,retrieve,cleanup}]
+python -m unittest: error: Remote stages require explicit --approved-upload for allowlisted files
+usage: python -m unittest [-h] [--run-id RUN_ID] [--state STATE]
+                          [--asset-manifest ASSET_MANIFEST]
+                          [--billing-record BILLING_RECORD]
+                          [--candidate CANDIDATE] [--audio AUDIO]
+                          [--checkpoint CHECKPOINT] [--output-dir OUTPUT_DIR]
+                          [--approved-upload] [--approved-compute]
+                          [--approved-cleanup]
+                          [{plan,create-manifest,upload-assets,prepare,probe,retrieve,cleanup}]
+python -m unittest: error: Remote stages require explicit --approved-upload for allowlisted files
+ok
+test_failed_parity_never_starts_model (test_modal_launcher.LauncherContract.test_failed_parity_never_starts_model) ... ok
+test_help_plan_and_import_are_local (test_modal_launcher.LauncherContract.test_help_plan_and_import_are_local) ... ok
+test_manifest_scope_rejects_before_reading_assets (test_modal_launcher.LauncherContract.test_manifest_scope_rejects_before_reading_assets) ... ok
+test_no_reference_backend_or_train_action (test_modal_launcher.LauncherContract.test_no_reference_backend_or_train_action) ... ok
+test_reject_alternate_modal_endpoint (test_modal_launcher.LauncherContract.test_reject_alternate_modal_endpoint) ... ok
+test_source_symlink_denied (test_modal_launcher.LauncherContract.test_source_symlink_denied) ... ok
+test_cache_model_ownership_and_automatic_update_detection (test_s0.S0Tests.test_cache_model_ownership_and_automatic_update_detection) ... ok
+test_exact_inventory (test_s0.S0Tests.test_exact_inventory) ... ok
+test_global_future_music_visible_bounded (test_s0.S0Tests.test_global_future_music_visible_bounded) ... ok
+test_hidden_future_no_leak_and_workspace_isolation (test_s0.S0Tests.test_hidden_future_no_leak_and_workspace_isolation) ... ok
+test_kda_streaming_conv_state (test_s0.S0Tests.test_kda_streaming_conv_state) ... ok
+test_padding_and_batch_reset (test_s0.S0Tests.test_padding_and_batch_reset) ... ok
+test_recurrence_matches_independent_matrix_equation_and_grad (test_s0.S0Tests.test_recurrence_matches_independent_matrix_equation_and_grad) ... ok
+test_shared_weight_identity_and_all_new_gradients (test_s0.S0Tests.test_shared_weight_identity_and_all_new_gradients) ... ok
+test_step_teacher_forcing_and_context_invalidation (test_s0.S0Tests.test_step_teacher_forcing_and_context_invalidation) ... ok
+
+----------------------------------------------------------------------
+Ran 22 tests in 1.508s
+
+OK

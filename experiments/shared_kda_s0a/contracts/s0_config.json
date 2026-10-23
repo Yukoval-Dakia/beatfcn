@@ -1,0 +1,19 @@
+{
+  "dim": 1024,
+  "depth": 24,
+  "heads": 16,
+  "kda_heads": 8,
+  "insert_after": [
+    6,
+    12,
+    18,
+    24
+  ],
+  "ffn_hidden": 4096,
+  "feature_dim": 8,
+  "intent_tokens": 8,
+  "local_max_frames": 1024,
+  "global_max_tokens": 600,
+  "max_groups": 256,
+  "max_prefix": 1536
+}

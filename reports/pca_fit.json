@@ -1,0 +1,31 @@
+{
+ "src_key": "v2_L9-16-24",
+ "songs": 150,
+ "dims": 512,
+ "layers": [
+  9,
+  16,
+  24
+ ],
+ "L9": {
+  "vectors": 360000,
+  "variance_kept": 0.9228,
+  "mean_rel_recon_err": 0.0781,
+  "variance_kept_128": 0.7123,
+  "variance_kept_512": 0.9228
+ },
+ "L16": {
+  "vectors": 360000,
+  "variance_kept": 0.9235,
+  "mean_rel_recon_err": 0.0765,
+  "variance_kept_128": 0.6989,
+  "variance_kept_512": 0.9235
+ },
+ "L24": {
+  "vectors": 360000,
+  "variance_kept": 0.8329,
+  "mean_rel_recon_err": 0.1702,
+  "variance_kept_128": 0.5065,
+  "variance_kept_512": 0.8329
+ }
+}

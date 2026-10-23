@@ -1,0 +1,42 @@
+[
+ {
+  "gpu": "L4",
+  "device": "NVIDIA L4",
+  "best_batch": 4,
+  "windows_per_s": 14.7,
+  "peak_gb": 1.17,
+  "windows_per_dollar": 66216
+ },
+ {
+  "gpu": "A10",
+  "device": "NVIDIA A10",
+  "best_batch": 16,
+  "windows_per_s": 21.9,
+  "peak_gb": 2.23,
+  "windows_per_dollar": 71569
+ },
+ {
+  "gpu": "L40S",
+  "device": "NVIDIA L40S",
+  "best_batch": 4,
+  "windows_per_s": 56.4,
+  "peak_gb": 1.17,
+  "windows_per_dollar": 104059
+ },
+ {
+  "gpu": "A100-40GB",
+  "device": "NVIDIA A100-SXM4-40GB",
+  "best_batch": 32,
+  "windows_per_s": 63.4,
+  "peak_gb": 3.64,
+  "windows_per_dollar": 108748
+ },
+ {
+  "gpu": "H100",
+  "device": "NVIDIA H100 80GB HBM3",
+  "best_batch": 32,
+  "windows_per_s": 132.3,
+  "peak_gb": 3.67,
+  "windows_per_dollar": 120602
+ }
+]

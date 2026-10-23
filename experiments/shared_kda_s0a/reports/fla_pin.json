@@ -1,0 +1,22 @@
+{
+  "version": "0.5.2",
+  "wheel": "fla_core-0.5.2-py3-none-any.whl",
+  "url": "https://files.pythonhosted.org/packages/2d/ed/dfe19c4da779957eb6a42a26812f9b4e2280bf757a17a71933ff59ffcb98/fla_core-0.5.2-py3-none-any.whl",
+  "sha256": "5e830c85bad3d0d34677f98ac7074d08687a3756f0f0499d95ceb96eb6920761",
+  "wheel_hash_verified": true,
+  "static_inspected_not_installed": true,
+  "chunk_source_sha256": "a15aa6ac257af5c8f7a1d6afc21a417391568e90a8898d4e228ddeb48cb0e9b8",
+  "dependencies": [
+    "einops",
+    "torch>=2.7.0; extra == \"cuda\"",
+    "triton>=3.3; extra == \"cuda\"",
+    "torch>=2.7.0; extra == \"rocm\"",
+    "torch>=2.7.0; extra == \"xpu\"",
+    "torch==2.7.1; extra == \"npu\"",
+    "torch_npu==2.7.1.post4; extra == \"npu\"",
+    "torchvision==0.22.1; extra == \"npu\"",
+    "triton-ascend==3.2.1; extra == \"npu\"",
+    "torch>=2.7.0; extra == \"cpu\"",
+    "triton>=3.3; extra == \"cpu\""
+  ]
+}

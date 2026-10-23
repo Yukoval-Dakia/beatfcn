@@ -1,0 +1,4 @@
+# Official PyPI wheel verified by SHA256; static inspected only, not installed here.
+# Use --no-deps ONLY after separately pinning compatible torch>=2.7, triton>=3.3,
+# and einops in the authorized GPU environment. No implicit runtime upgrades.
+fla-core==0.5.2 --hash=sha256:5e830c85bad3d0d34677f98ac7074d08687a3756f0f0499d95ceb96eb6920761

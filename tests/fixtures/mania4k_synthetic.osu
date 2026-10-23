@@ -1,0 +1,38 @@
+osu file format v14
+
+[General]
+AudioFilename: audio.mp3
+AudioLeadIn: 0
+Mode: 3
+
+[Metadata]
+Title:Synthetic P0 Fixture
+Artist:BeatFCN tests
+Creator:p0-tests
+Version:4K synthetic (hand-written, not a real chart)
+
+[Difficulty]
+HPDrainRate:8
+CircleSize:4
+OverallDifficulty:8
+ApproachRate:5
+SliderMultiplier:1.4
+SliderTickRate:1
+
+[Events]
+//Background and Video events
+
+[TimingPoints]
+1000,500,4,2,0,60,1,0
+3000,-50,4,2,0,60,0,0
+5000,375,4,2,0,60,1,0
+6500,-200,4,2,0,60,0,0
+
+[HitObjects]
+64,192,1000,1,0,0:0:0:0:
+192,192,1000,1,0,0:0:0:0:
+320,192,1500,128,0,2500:0:0:0:0:
+448,192,2000,5,0,0:0:0:0:
+64,192,3000,1,0,0:0:0:0:
+192,192,5000,128,0,6125:0:0:0:0:
+448,192,6500,1,0,0:0:0:0:

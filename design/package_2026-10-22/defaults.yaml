@@ -1,0 +1,284 @@
+# Design contract, not a runnable training implementation.
+# Values are initial decisions; measured performance is not yet available.
+schema_version: beatfcn.intent.v1
+seed: 20261022
+candidate: A
+candidate_b_overrides:
+  selection_field_enabled: false
+  loss_select: 0.0
+  loss_counterfactual: 0.0
+  preserve_same_reference_inputs: true
+  preserve_same_paired_training_examples: true
+  match_actual_compute_budget: true
+
+audio:
+  family: PupuM2D-Large
+  repository: spellbrush/PupuM2D
+  checkpoint_path: null  # Bind the actual downloaded encoder before training.
+  checkpoint_sha256: null  # Required in the materialized run manifest.
+  code_revision: null
+  encoder_layers: 24
+  encoder_width: 1024
+  encoder_heads: 16
+  expected_encoder_parameters_approx: 403000000
+  sample_rate: 24000
+  channels: 1
+  n_fft: 1024
+  window_samples: 1024
+  hop_samples: 240
+  mel_bins: 128
+  normalization: exact_checkpoint_preprocessor
+  patch_time_frames: 4
+  patch_frequency_bins: 16
+  temporal_hz: 25
+  frequency_tokens: 8
+  native_window_ms: 10240
+  native_hop_ms: 5120
+  retain: center_5120ms
+  global_layer: 20
+  fine_layer: 24
+  per_source_layer_norm: true
+  source_layer_embedding: true
+  frequency_pool:
+    method: learned_queries_within_frame
+    output_slots: 4
+    output_width: 512
+    attention_heads: 8
+
+context:
+  generation_core_ms: 8000
+  local_halo_each_side_ms: 4000
+  prefix_max_tokens: 1536
+  global_default_bucket_ms: 2000
+  global_audio_tokens_per_bucket: 4
+  global_known_chart_tokens_per_bucket: 1
+  global_max_tokens: 600
+  endpoint_bucket_ms: 2000  # Fixed, independent of adaptive global buckets.
+  remote_retrieval:
+    index_source: frozen_H20
+    top_k: 2
+    segment_ms: 4000
+    exclude_local: true
+    references_have_priority: true
+    chart_source: observed_or_generated_only
+  max_generated_groups: 256
+  max_generated_events: 512
+  max_local_known_events: 512
+  overflow_policy: split_core_keep_groups_and_carry
+  irreducible_overflow_status: resource_exhausted
+
+model:
+  layers: 8
+  width: 512
+  attention_heads: 8
+  norm: pre_rmsnorm
+  ffn: swiglu
+  ffn_hidden: 1536
+  self_attention: block_prefix_then_causal
+  music_cross_attention_per_layer: true
+  attention_backend: sdpa_with_verified_mask_semantics
+  dropout: 0.1
+  activation_checkpointing: true
+  intent_tokens: 8
+  independent_intent_backbone: false
+  inner_group_gru:
+    layers: 1
+    input_width: 256
+    hidden_width: 256
+  outer_feedback: attributes_only_group_pool
+  forbid_empty_onset_groups: true
+  strictly_increasing_generated_group_times: true
+  time:
+    coarse_ms: 10
+    fine_ms: 1
+    allow_exact_known_time_pointer: true
+    hidden_targets_quantized_before_grouping: true
+    imported_observed_events_never_quantized: true
+    unrepresentable_quantization_policy: quarantine_and_report
+  hold:
+    representation: end_block_then_coarse_then_fine
+    read_endpoint_fine_audio_after_block_prediction: true
+    allow_cross_generation_windows: true
+    forbid_cross_closed_permissions: true
+  phira_position:
+    distribution: bounded_logistic_mixture
+    components: 5
+    domain_source: scene_allowed_coordinates
+  selection_field:
+    enabled: true
+    temporal_hz: 25
+    bias: lambda_times_2tanh_s_over_2
+    lambda_initial: 0.5
+    lambda_bounds: [0.0, 1.0]
+    input: target_audio_and_reference_intent_only
+    score_lookup: exact_memory_cell_no_interpolation
+
+references:
+  min_complete_segments: 1
+  max_complete_segments: 2
+  default_segment_ms: 4000
+  max_total_ms: 16000
+  max_selected_tokens: 128
+  max_unselected_tokens: 128
+  unselected_requires_complete_coverage: true
+  unselected_salient_fraction: 0.5
+  exclude_onset_radius_ms: 30
+  exclude_ambiguous_active_hold: true
+  empty_reference: learned_default_intent
+  original_observed_anchors_as_positive_only_evidence: true
+  unknown_coverage_never_creates_negative_evidence: true
+  current_generation_never_promoted_to_human_intent_evidence: true
+
+data:
+  formats: [osu_mania_4k, phira_rpe, phira_pec_via_verified_converter]
+  canonical_time_unit: microseconds
+  preserve_native_rational_beats: true
+  preserve_native_sidecars: true
+  song_group_split: [0.8, 0.1, 0.1]
+  split_before_windowing: true
+  same_recording_variants_same_group: true
+  exclude_id_metadata_from_model: true
+  mode_sampling: sqrt_unique_song_count
+  then_sample: [song, chart, request]
+  exact_timing_map_dropout: 0.5
+  mask_mix:
+    from_scratch: 0.20
+    prefix_continuation: 0.15
+    middle_or_multiple_gaps: 0.25
+    sparse_anchors: 0.20
+    reference_transfer: 0.20
+  empty_region_overlay_probability: 0.20
+  boundary_hold_overlay_probability: 0.20
+  blank_target_policy: remove_whole_hidden_objects_only
+  crossing_permission_hold_policy: observe_whole_or_expand_editable
+
+controls:
+  use_missingness_masks: true
+  vector_dropout: 0.20
+  field_dropout: 0.20
+  density_condition: quantized_band_not_exact_local_count
+  statistic_scope: editable_interval_union
+  hold_occupancy_definition: fraction_of_editable_time_with_any_active_hold
+  recompute_derived_controls_after_augmentation: true
+  separate_hold_head_ratio_and_occupancy: true
+  shared_star_scale_across_modes: false
+  semantic_named_axes_require_labels: true
+
+counterfactual:
+  enabled: true
+  same_audio_group: true
+  same_mode: true
+  disjoint_support_target: true
+  same_support_audio_candidate_pool: true
+  balanced_positive_negative_counts: true
+  mask_all_reference_note_attributes_in_strict_view: true
+  isolate_support_from_other_reference_and_observed_evidence: true
+  assert_input_equality_except_selected_bit: true
+  remove_shared_selection_cells: true
+  score_unique_cells_only: true
+  default_k: 8
+  permitted_k: [4, 16]
+  onset_matching_tolerance_ms: 30
+  require_non_nested_real_charts: true
+  margin: 0.5
+  frequency_optimizer_steps: 4
+  minimum_train_song_groups: 50
+  minimum_independent_pair_episodes: 300
+  target_candidates_visible_to_decoder: false
+  shuffled_labels_as_training_truth: false
+
+loss:
+  event: 1.0
+  select: 0.2
+  counterfactual: 0.1
+  normalize_per_valid_field: true
+  normalize_stop_actions_separately: true
+  type_weight: train_inverse_sqrt_frequency_clipped_1_4
+  auxiliary_weight_ramp_steps: 1000
+
+training:
+  precision: bf16_when_supported
+  hardware_planning_class_gb: 24
+  microbatch: 2
+  accumulation: 16
+  effective_batch: 32
+  oom_fallback_microbatch: 1
+  oom_fallback_accumulation: 32
+  optimizer: adamw
+  betas: [0.9, 0.95]
+  weight_decay: 0.01
+  gradient_clip_norm: 1.0
+  validate_every_steps: 500
+  early_stop_no_improvement_validations: 4
+  protocol_smoke_examples: 32
+  pilot:
+    independent_songs: [300, 500]
+    max_optimizer_steps: 3000
+  stage1:
+    encoder_frozen: true
+    train_event_and_projection: true
+    learning_rate: 0.0002
+    min_learning_rate: 0.00002
+    warmup_steps: 500
+    chart_hour_coverages: 3
+    max_optimizer_steps: 22000
+  stage2:
+    max_optimizer_steps: 3000
+    event_learning_rate: 0.00005
+    lora_learning_rate: 0.000005
+    frozen_prefix_layers: 20
+    lora_layers_1based: [21, 22, 23, 24]
+    lora_rank: 8
+    lora_alpha: 16
+    lora_dropout: 0.05
+    lora_target_roles: [fused_qkv, attention_output, swiglu_fc1, swiglu_fc2]
+    target_shapes_must_be_verified: true
+    original_weights_frozen: true
+    sample_bucket: song_then_multiple_distinct_requests
+    deduplicate_native_windows_per_step: true
+    accept_only_if_heldout_gate_passes: true
+    fallback_checkpoint: best_stage1
+
+cache:
+  stage1_primary: raw_H24_center_bf16
+  global_source: raw_H20_time_means
+  trainable_projection_outputs_reusable_during_training: false
+  int8_requires_end_to_end_equivalence_check: true
+  stage2_fine: recompute_top4_current_lora
+  stage2_H20: original_native_window_bf16_with_rope_and_padding
+  stage2_cache_policy: bounded_lru_and_song_bucketing
+  stage2_H20_must_not_be_pooled_or_final_normalized: true
+  inference_projected_audio_cache: true
+  key_policy: exact_tensor_dependencies
+  H20_key_includes: [audio, preprocessing, windows, padding, frozen_prefix_weights, layer, precision]
+  H20_key_excludes: [upper_lora, trainable_reader]
+  H24_additional_key_includes: [upper_encoder_weights, upper_lora]
+  projected_additional_key_includes: [source_norm, frequency_pool, projection, source_embedding]
+
+inference:
+  default_candidates: 1
+  temperature: 0.8
+  top_p: 0.95
+  greedy_available_for_reproducibility: true
+  constraints_before_sampling: true
+  bounded_backtrack_groups: 2
+  bounded_resample_attempts: 4
+  always_return_region_status: true
+  final_independent_validation: true
+  human_native_objects_immutable: true
+
+acceptance_targets_not_measurements:
+  protected_event_changes: 0
+  forbidden_new_occupancy: 0
+  dangling_or_duplicate_hold_heads: 0
+  legal_completion_fraction_min: 0.95
+  control_direction_correct_song_fraction_min: 0.80
+  intent_blind_non_tie_win_fraction_min: 0.60
+  intent_blind_cluster_ci_lower_min: 0.50
+  editing_time_relative_reduction_target: 0.15
+  target_device_vram_gb: 4
+  process_peak_vram_gib_max: 3.5
+  warm_edit_core_seconds: 8
+  warm_edit_new_event_limit: 128
+  warm_edit_p50_seconds_max: 2
+  warm_edit_p95_seconds_max: 5

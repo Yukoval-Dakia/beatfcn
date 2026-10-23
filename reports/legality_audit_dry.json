@@ -1,0 +1,12 @@
+{
+ "rows": 246,
+ "cores_tried": 2000,
+ "reasons": {
+  "legal": 1989,
+  "SkipExample:reference evidence exceeds bound": 11
+ },
+ "model_forward": {
+  "ok": 150
+ },
+ "examples": []
+}

@@ -1,0 +1,155 @@
+{
+  "revision": "frozen-audio-memory 2026-10-22b",
+  "hardware": "Apple Silicon, 17.2 GB unified memory, macOS (Darwin 27.2)",
+  "probe": {
+    "status": "passed",
+    "scope": "S0a full-size shared numerical probe, synthetic event/condition features, NOT S0b training",
+    "torch": "2.6.0",
+    "python": "3.12.13",
+    "device": "mps",
+    "backend": "chunk",
+    "mel_frames": 1024,
+    "previous_groups": 2,
+    "steps": 2,
+    "dtype": "bfloat16",
+    "native_window_test": true,
+    "audio_scope": "synthetic normalized-shape input; no real audio claim",
+    "checkpoint_sha256": "6a97605541ba9d3680f6758e2ae19019736f03e5db14e8bbfbd71746b19304f4",
+    "checkpoint_sha256_verified": true,
+    "loaded_tensors": 294,
+    "load_seconds": 1.3496628330030944,
+    "audio_encode_seconds": 1.344007417006651,
+    "audio_memory_bytes": 222298112,
+    "inference_seconds": {
+      "edit_first_kda_prefix_fill": 0.6716135419846978,
+      "edit_memo_hit": 0.1448252499976661,
+      "no_memory_full_reencode": 1.5526635409914888
+    },
+    "frozen_sample_values_unchanged": true,
+    "total_seconds": 13.77591975001269,
+    "mps_samples": [
+      {
+        "phase": "loaded",
+        "current_allocated": 953830144,
+        "driver_allocated": 999276544
+      },
+      {
+        "phase": "audio_memory",
+        "current_allocated": 1729778432,
+        "driver_allocated": 2490433536
+      },
+      {
+        "phase": "step0_forward",
+        "current_allocated": 4734024960,
+        "driver_allocated": 6437027840
+      },
+      {
+        "phase": "step0_backward",
+        "current_allocated": 1917621760,
+        "driver_allocated": 6304235520
+      },
+      {
+        "phase": "step1_forward",
+        "current_allocated": 4689911808,
+        "driver_allocated": 6364839936
+      },
+      {
+        "phase": "step1_backward",
+        "current_allocated": 1930232064,
+        "driver_allocated": 6364839936
+      },
+      {
+        "phase": "inference",
+        "current_allocated": 1996693760,
+        "driver_allocated": 6497124352
+      }
+    ]
+  },
+  "probe_iterations": [
+    {
+      "loss": 6.459366798400879,
+      "forward_backward_seconds": 5.144428500003414,
+      "missing_gradients": [],
+      "nonfinite_gradients": [],
+      "frozen_gradients": []
+    },
+    {
+      "loss": 25857.4375,
+      "forward_backward_seconds": 2.596772584016435,
+      "missing_gradients": [],
+      "nonfinite_gradients": [],
+      "frozen_gradients": []
+    }
+  ],
+  "inventory": {
+    "total": 476739917,
+    "trainable": 73598285,
+    "frozen": 403141632
+  },
+  "same_shape_comparison": {
+    "method": "Full-size BF16 model on MPS, batch 1, 2 previous groups, synthetic inputs, both with the exact chunked KDA and MPS-safe indexing; first revision = HEAD df7d807 model (audio rows with grad, 5 scans). 4 train steps (first includes warmup), then no_grad edit forward.",
+    "runs": [
+      {
+        "label": "head_design",
+        "frames": 256,
+        "train_step_seconds": [
+          8.231516916013788,
+          2.5504224579781294,
+          2.409930916997837,
+          2.4457036669773515
+        ],
+        "steady_train_step": 2.409930916997837,
+        "edit_forward_seconds": 0.7967890840081964,
+        "driver_peak_gb": 7.07403776
+      },
+      {
+        "label": "frozen_audio_memory",
+        "frames": 256,
+        "train_step_seconds": [
+          2.078591666999273,
+          0.7846399999980349,
+          0.8055323339940514,
+          0.771100124984514
+        ],
+        "steady_train_step": 0.771100124984514,
+        "edit_forward_seconds": 0.09802941599627957,
+        "driver_peak_gb": 2.649276416
+      },
+      {
+        "label": "head_design",
+        "frames": 512,
+        "train_step_seconds": [
+          30.47671558399452,
+          143.22241220797878,
+          37.404673707991606,
+          32.43901737499982
+        ],
+        "steady_train_step": 32.43901737499982,
+        "edit_forward_seconds": 2.0045371250016615,
+        "driver_peak_gb": 10.871062528
+      },
+      {
+        "label": "frozen_audio_memory",
+        "frames": 512,
+        "train_step_seconds": [
+          2.5133190829947125,
+          1.2654539579816628,
+          1.332362999994075,
+          1.3555472499865573
+        ],
+        "steady_train_step": 1.2654539579816628,
+        "edit_forward_seconds": 0.10120462501072325,
+        "driver_peak_gb": 3.70679808
+      }
+    ],
+    "native_1024_first_revision": "MPS OOM: allocated 19.53 GB of 20.13 GB allowed",
+    "caveat": "First-revision 512-frame timing (10.9 GB driver on a 17 GB machine) likely includes memory-pressure slowdown; treat as indicative, not a clean compute ratio."
+  },
+  "not_established": [
+    "CUDA/FLA parity",
+    "real Higher audio",
+    "SFT or chart quality",
+    "4 GB device feasibility",
+    "MPS has no peak counter; memory = phase samples"
+  ]
+}

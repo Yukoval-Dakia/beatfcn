@@ -1,0 +1,43 @@
+{
+  "schema_version": "beatfcn.intent.v1",
+  "request_id": "synthetic-example-not-a-real-chart",
+  "status": "completed",
+  "additions": [
+    {
+      "event_id": "generated-demo-1",
+      "onset_us": 10000000,
+      "end_us": 12500000,
+      "type": "hold",
+      "location": {
+        "kind": "lane",
+        "lane": 2
+      }
+    },
+    {
+      "event_id": "generated-demo-2",
+      "onset_us": 13000000,
+      "end_us": 13000000,
+      "type": "tap",
+      "location": {
+        "kind": "lane",
+        "lane": 0
+      }
+    }
+  ],
+  "region_results": [
+    {
+      "region_id": "work",
+      "status": "completed",
+      "violations": []
+    }
+  ],
+  "notes": [
+    "Synthetic protocol example only; no model ran, and these notes do not demonstrate music quality or control compliance."
+  ],
+  "unchanged_observed_event_ids": [
+    "human-1",
+    "human-2",
+    "human-3",
+    "human-4"
+  ]
+}

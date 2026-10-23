@@ -1,0 +1,232 @@
+{
+ "gpu": "NVIDIA H100 80GB HBM3",
+ "train_songs": 82,
+ "val_songs": 15,
+ "train_cells_seen": 753314,
+ "val_cells": 65976,
+ "val_pos_rate": 0.2656117379665375,
+ "val_peak_cells": 16392,
+ "val_pos_rate_on_peaks": 0.5997437834739685,
+ "pos_weight": 1.1291728440217441,
+ "epochs": 2,
+ "seconds_total": 121.1,
+ "seconds_train": 105.5,
+ "layers": [
+  {
+   "layer": 1,
+   "ap_onset": 0.46686704260568745,
+   "ap_select_on_peaks": 0.6870983585125242,
+   "ap_onset_mania_4k": 0.6249655277724194,
+   "ap_select_mania_4k": 0.8365449722467669,
+   "ap_onset_phira": 0.42279572412122907,
+   "ap_select_phira": 0.6673128199698093
+  },
+  {
+   "layer": 2,
+   "ap_onset": 0.476619487086808,
+   "ap_select_on_peaks": 0.705017138971245,
+   "ap_onset_mania_4k": 0.734280627292259,
+   "ap_select_mania_4k": 0.8549235221445872,
+   "ap_onset_phira": 0.41002485892685037,
+   "ap_select_phira": 0.6839551816365327
+  },
+  {
+   "layer": 3,
+   "ap_onset": 0.47486957199377317,
+   "ap_select_on_peaks": 0.7031528499623264,
+   "ap_onset_mania_4k": 0.725807066466047,
+   "ap_select_mania_4k": 0.840082900071658,
+   "ap_onset_phira": 0.4126406777387155,
+   "ap_select_phira": 0.6850087719823788
+  },
+  {
+   "layer": 4,
+   "ap_onset": 0.47271623612813735,
+   "ap_select_on_peaks": 0.7068087112127233,
+   "ap_onset_mania_4k": 0.749508990120669,
+   "ap_select_mania_4k": 0.8411908027248888,
+   "ap_onset_phira": 0.410658293561377,
+   "ap_select_phira": 0.6871181955882673
+  },
+  {
+   "layer": 5,
+   "ap_onset": 0.4892770979535047,
+   "ap_select_on_peaks": 0.7131210717657712,
+   "ap_onset_mania_4k": 0.7395371304930703,
+   "ap_select_mania_4k": 0.8221185016808207,
+   "ap_onset_phira": 0.42427061372761793,
+   "ap_select_phira": 0.6951871996425194
+  },
+  {
+   "layer": 6,
+   "ap_onset": 0.4960340447867458,
+   "ap_select_on_peaks": 0.7133865374403552,
+   "ap_onset_mania_4k": 0.7149727280453706,
+   "ap_select_mania_4k": 0.811115394266133,
+   "ap_onset_phira": 0.43431597879908074,
+   "ap_select_phira": 0.698007390523433
+  },
+  {
+   "layer": 7,
+   "ap_onset": 0.49189295526198745,
+   "ap_select_on_peaks": 0.7139681916287275,
+   "ap_onset_mania_4k": 0.7093620024508768,
+   "ap_select_mania_4k": 0.8274945890954221,
+   "ap_onset_phira": 0.43404628522976035,
+   "ap_select_phira": 0.6983266292875243
+  },
+  {
+   "layer": 8,
+   "ap_onset": 0.48756914189374756,
+   "ap_select_on_peaks": 0.7070432114529269,
+   "ap_onset_mania_4k": 0.7069453662109916,
+   "ap_select_mania_4k": 0.8382446056519384,
+   "ap_onset_phira": 0.43098422295780164,
+   "ap_select_phira": 0.6920572990312182
+  },
+  {
+   "layer": 9,
+   "ap_onset": 0.4572636812266493,
+   "ap_select_on_peaks": 0.70789540985718,
+   "ap_onset_mania_4k": 0.7543324862106988,
+   "ap_select_mania_4k": 0.8362648575663844,
+   "ap_onset_phira": 0.39578779803181624,
+   "ap_select_phira": 0.6905535672242543
+  },
+  {
+   "layer": 10,
+   "ap_onset": 0.44927571824380375,
+   "ap_select_on_peaks": 0.7091824585757038,
+   "ap_onset_mania_4k": 0.7263653256282142,
+   "ap_select_mania_4k": 0.831235293333611,
+   "ap_onset_phira": 0.3964968543533494,
+   "ap_select_phira": 0.6947044521602523
+  },
+  {
+   "layer": 11,
+   "ap_onset": 0.45933486437411913,
+   "ap_select_on_peaks": 0.7090970009169625,
+   "ap_onset_mania_4k": 0.7117259853082573,
+   "ap_select_mania_4k": 0.8485496039728835,
+   "ap_onset_phira": 0.4035967249910584,
+   "ap_select_phira": 0.6964367633537787
+  },
+  {
+   "layer": 12,
+   "ap_onset": 0.47031865481072566,
+   "ap_select_on_peaks": 0.715924303393287,
+   "ap_onset_mania_4k": 0.7089505336270157,
+   "ap_select_mania_4k": 0.823231933041872,
+   "ap_onset_phira": 0.42327576346345824,
+   "ap_select_phira": 0.703623373667422
+  },
+  {
+   "layer": 13,
+   "ap_onset": 0.47409439827579664,
+   "ap_select_on_peaks": 0.7124394138845571,
+   "ap_onset_mania_4k": 0.7102180030675433,
+   "ap_select_mania_4k": 0.8241938048607881,
+   "ap_onset_phira": 0.4243521186817282,
+   "ap_select_phira": 0.7035016997410013
+  },
+  {
+   "layer": 14,
+   "ap_onset": 0.4638600596594164,
+   "ap_select_on_peaks": 0.6967760281360265,
+   "ap_onset_mania_4k": 0.7092663303044059,
+   "ap_select_mania_4k": 0.8284480969666947,
+   "ap_onset_phira": 0.4068977187734324,
+   "ap_select_phira": 0.6816763060746946
+  },
+  {
+   "layer": 15,
+   "ap_onset": 0.46249719688537544,
+   "ap_select_on_peaks": 0.692140182654414,
+   "ap_onset_mania_4k": 0.6899158442430874,
+   "ap_select_mania_4k": 0.807016532549789,
+   "ap_onset_phira": 0.40549139421176383,
+   "ap_select_phira": 0.6803896517820609
+  },
+  {
+   "layer": 16,
+   "ap_onset": 0.4533003801085089,
+   "ap_select_on_peaks": 0.6991694648818993,
+   "ap_onset_mania_4k": 0.6284843256455692,
+   "ap_select_mania_4k": 0.7729107210232758,
+   "ap_onset_phira": 0.41432519680625074,
+   "ap_select_phira": 0.6937706955016375
+  },
+  {
+   "layer": 17,
+   "ap_onset": 0.46814604873310045,
+   "ap_select_on_peaks": 0.7104665856330278,
+   "ap_onset_mania_4k": 0.598496252527839,
+   "ap_select_mania_4k": 0.7482713368184315,
+   "ap_onset_phira": 0.43789567321229184,
+   "ap_select_phira": 0.7116237828827124
+  },
+  {
+   "layer": 18,
+   "ap_onset": 0.4796109964549538,
+   "ap_select_on_peaks": 0.7159129271095411,
+   "ap_onset_mania_4k": 0.6051983056708182,
+   "ap_select_mania_4k": 0.7656681104719194,
+   "ap_onset_phira": 0.4518458022550236,
+   "ap_select_phira": 0.7219739749451106
+  },
+  {
+   "layer": 19,
+   "ap_onset": 0.4707812926350761,
+   "ap_select_on_peaks": 0.7097981766015576,
+   "ap_onset_mania_4k": 0.5959914309479168,
+   "ap_select_mania_4k": 0.7519007312683265,
+   "ap_onset_phira": 0.44338300495788674,
+   "ap_select_phira": 0.7184156366755252
+  },
+  {
+   "layer": 20,
+   "ap_onset": 0.45731301506262817,
+   "ap_select_on_peaks": 0.7059294756542297,
+   "ap_onset_mania_4k": 0.5869990258223109,
+   "ap_select_mania_4k": 0.7322204171974303,
+   "ap_onset_phira": 0.42882502234870723,
+   "ap_select_phira": 0.7168906751387134
+  },
+  {
+   "layer": 21,
+   "ap_onset": 0.4627885010141048,
+   "ap_select_on_peaks": 0.7079192051323664,
+   "ap_onset_mania_4k": 0.5539918491634519,
+   "ap_select_mania_4k": 0.6927437089533536,
+   "ap_onset_phira": 0.4401625298084802,
+   "ap_select_phira": 0.7235866849091542
+  },
+  {
+   "layer": 22,
+   "ap_onset": 0.47238427848047426,
+   "ap_select_on_peaks": 0.715309257940359,
+   "ap_onset_mania_4k": 0.5706400972263503,
+   "ap_select_mania_4k": 0.7174611667502445,
+   "ap_onset_phira": 0.44699493699259946,
+   "ap_select_phira": 0.7337530083928365
+  },
+  {
+   "layer": 23,
+   "ap_onset": 0.4691992788040324,
+   "ap_select_on_peaks": 0.7123312852418885,
+   "ap_onset_mania_4k": 0.5919509872865065,
+   "ap_select_mania_4k": 0.7427787624673693,
+   "ap_onset_phira": 0.4400416003767109,
+   "ap_select_phira": 0.7264535162469254
+  },
+  {
+   "layer": 24,
+   "ap_onset": 0.47723176770714926,
+   "ap_select_on_peaks": 0.7119414291775088,
+   "ap_onset_mania_4k": 0.6289387853958741,
+   "ap_select_mania_4k": 0.7669279857880639,
+   "ap_onset_phira": 0.44175413986833223,
+   "ap_select_phira": 0.7225305554337405
+  }
+ ]
+}

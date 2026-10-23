@@ -1,0 +1,79 @@
+{
+ "formatVersion": 3,
+ "offset": 0.1,
+ "judgeLineList": [
+  {
+   "bpm": 120.0,
+   "notesAbove": [
+    {
+     "type": 1,
+     "time": 32,
+     "positionX": 1.5,
+     "holdTime": 0.0,
+     "speed": 1.0,
+     "floorPosition": 0.0
+    },
+    {
+     "type": 3,
+     "time": 64,
+     "positionX": -2.0,
+     "holdTime": 48.0,
+     "speed": 1.0,
+     "floorPosition": 0.0
+    }
+   ],
+   "notesBelow": [
+    {
+     "type": 2,
+     "time": 96,
+     "positionX": 0.5,
+     "holdTime": 0.0,
+     "speed": 1.0,
+     "floorPosition": 0.0
+    },
+    {
+     "type": 4,
+     "time": 100,
+     "positionX": -0.5,
+     "holdTime": 0.0,
+     "speed": 1.0,
+     "floorPosition": 0.0
+    }
+   ],
+   "speedEvents": [
+    {
+     "startTime": 0.0,
+     "endTime": 999999.0,
+     "value": 1.0
+    }
+   ],
+   "judgeLineMoveEvents": [],
+   "judgeLineRotateEvents": [],
+   "judgeLineDisappearEvents": []
+  },
+  {
+   "bpm": 200.0,
+   "notesAbove": [
+    {
+     "type": 1,
+     "time": 16,
+     "positionX": 0.0,
+     "holdTime": 0.0,
+     "speed": 1.0,
+     "floorPosition": 0.0
+    }
+   ],
+   "notesBelow": [],
+   "speedEvents": [
+    {
+     "startTime": 0.0,
+     "endTime": 999999.0,
+     "value": 1.0
+    }
+   ],
+   "judgeLineMoveEvents": [],
+   "judgeLineRotateEvents": [],
+   "judgeLineDisappearEvents": []
+  }
+ ]
+}

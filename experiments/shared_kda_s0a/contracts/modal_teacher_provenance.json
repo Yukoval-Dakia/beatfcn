@@ -1,0 +1,13 @@
+{
+  "source_url": "https://huggingface.co/spellbrush/PupuM2D/resolve/c0f9345a1de0e61237dec7da32a70049c4ec0fa8/pupum2dV2_25hz_large/checkpoint/step-0500000_loss-0.176985/model.safetensors?download=true",
+  "source_commit": "c0f9345a1de0e61237dec7da32a70049c4ec0fa8",
+  "publisher_fullfile_lfs_sha256": "06b1c2c7b93d6184923b052b5be0f6bc50040e87d5ef87acee51e15f0868ae57",
+  "publisher_fullfile_lfs_sha256_verified": false,
+  "integrity_scope": "HTTPS range length/content-range verified; local subset and each tensor hashed; publisher does not supply per-tensor hashes",
+  "subset_sha256": "6a97605541ba9d3680f6758e2ae19019736f03e5db14e8bbfbd71746b19304f4",
+  "size": 1612597160,
+  "parameter_count": 403141632,
+  "tensor_count": 294,
+  "input_filename": "teacher_encoder.safetensors",
+  "transfer_scope": "Supply this exact already-audited subset as a local input; the source ZIP excludes its bytes. No GPU-worker download."
+}

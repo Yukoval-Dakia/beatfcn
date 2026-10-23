@@ -1,0 +1,5 @@
+# Local orchestrator only. GPU image pins are explicit in modal_launch_s0a.py.
+modal==1.6.2
+# GPU runtime: Python 3.12; torch==2.7.1+cu126 from official cu126 index;
+# triton==3.3.1; einops==0.8.1; numpy==2.2.6; safetensors==0.5.3;
+# fla-core==0.5.2 is separately SHA256-enforced via requirements-fla.txt.

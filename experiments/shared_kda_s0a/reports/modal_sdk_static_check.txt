@@ -1,0 +1,2 @@
+PASS: modal==1.6.2 accepts image/function options with sockets disabled.
+Image/function unhydrated; app.run, build, spawn, and remote were NOT called.

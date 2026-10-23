@@ -1,0 +1,35 @@
+test_complete_reference_excludes_heads_and_active_holds (test_bridge.EvidenceTests.test_complete_reference_excludes_heads_and_active_holds) ... ok
+test_reference_negative_labels_do_not_depend_on_future_target_heads (test_bridge.EvidenceTests.test_reference_negative_labels_do_not_depend_on_future_target_heads) ... ok
+test_sparse_never_licenses_unselected (test_bridge.EvidenceTests.test_sparse_never_licenses_unselected) ... ok
+test_atomic_endpoints_beyond_core_and_unique_ownership (test_bridge.ModelViewTests.test_atomic_endpoints_beyond_core_and_unique_ownership) ... ok
+test_dense_core_splits_without_dropping_labels (test_bridge.ModelViewTests.test_dense_core_splits_without_dropping_labels) ... ok
+test_empty_gap_has_stop_not_fake_empty_group (test_bridge.ModelViewTests.test_empty_gap_has_stop_not_fake_empty_group) ... ok
+test_endpoint_first_stage_cannot_see_end_or_gold_block (test_bridge.ModelViewTests.test_endpoint_first_stage_cannot_see_end_or_gold_block) ... ok
+test_group_sort_and_copy_pointer (test_bridge.ModelViewTests.test_group_sort_and_copy_pointer) ... ok
+test_quantization_collision_and_collapsed_hold_quarantine (test_bridge.ModelViewTests.test_quantization_collision_and_collapsed_hold_quarantine) ... ok
+test_quantize_hidden_only_and_copy_exact_anchor (test_bridge.ModelViewTests.test_quantize_hidden_only_and_copy_exact_anchor) ... ok
+test_teacher_forcing_future_perturbation_and_completed_feedback (test_bridge.ModelViewTests.test_teacher_forcing_future_perturbation_and_completed_feedback) ... ok
+test_duplicate_rows_quarantined_not_merged_or_renamed (test_bridge.NativeTests.test_duplicate_rows_quarantined_not_merged_or_renamed) ... ok
+test_exact_fractional_native_time (test_bridge.NativeTests.test_exact_fractional_native_time) ... ok
+test_ids_are_stable_full_hash_plus_ordinal (test_bridge.NativeTests.test_ids_are_stable_full_hash_plus_ordinal) ... ok
+test_invalid_holds_modes_and_timing_fail_closed (test_bridge.NativeTests.test_invalid_holds_modes_and_timing_fail_closed) ... ok
+test_lane_release_half_open (test_bridge.NativeTests.test_lane_release_half_open) ... ok
+test_native_ms_not_bpm_or_leadin_shift (test_bridge.NativeTests.test_native_ms_not_bpm_or_leadin_shift) ... ok
+test_all_32_train_sources_and_integrity (test_bridge.RealArtifactTests.test_all_32_train_sources_and_integrity) ... ok
+test_all_targets_have_exact_once_group_ownership (test_bridge.RealArtifactTests.test_all_targets_have_exact_once_group_ownership) ... ok
+test_blank_suppression_explicit_whole_objects_only (test_bridge.RealArtifactTests.test_blank_suppression_explicit_whole_objects_only) ... ok
+test_boundary_holds_are_whole_observed_not_clipped_targets (test_bridge.RealArtifactTests.test_boundary_holds_are_whole_observed_not_clipped_targets) ... ok
+test_complete_reference_missing_note_or_fake_negative_rejected (test_bridge.RealArtifactTests.test_complete_reference_missing_note_or_fake_negative_rejected) ... ok
+test_corruption_is_rejected (test_bridge.RealArtifactTests.test_corruption_is_rejected) ... ok
+test_no_output_writes_outside_staging (test_bridge.RealArtifactTests.test_no_output_writes_outside_staging) ... ok
+test_no_target_or_chart_metadata_in_condition (test_bridge.RealArtifactTests.test_no_target_or_chart_metadata_in_condition) ... ok
+test_original_objects_resolve_to_unchanged_native_rows (test_bridge.RealArtifactTests.test_original_objects_resolve_to_unchanged_native_rows) ... ok
+test_prefix_invariance_to_arbitrary_hidden_labels_and_metadata (test_bridge.RealArtifactTests.test_prefix_invariance_to_arbitrary_hidden_labels_and_metadata) ... ok
+test_schema_draft_2020_if_available (test_bridge.RealArtifactTests.test_schema_draft_2020_if_available) ... ok
+test_teacher_forcing_never_includes_current_or_future_groups (test_bridge.RealArtifactTests.test_teacher_forcing_never_includes_current_or_future_groups) ... ok
+test_unknown_task_kind_not_fabricated (test_bridge.RealArtifactTests.test_unknown_task_kind_not_fabricated) ... ok
+
+----------------------------------------------------------------------
+Ran 30 tests in 12.051s
+
+OK

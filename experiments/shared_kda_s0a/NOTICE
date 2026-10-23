@@ -1,0 +1,21 @@
+Shared Pupu24 + KDA4 S0a source attribution
+
+The Pupu encoder adapter reconstructs inference operations from PupuM2D
+(sizigi/PupuM2D, MIT) and historical timm EVA, AttentionRope, RoPE and SwiGLU
+implementations (huggingface/pytorch-image-models v1.0.22, Apache-2.0).
+The Slaney mel-filter routine follows librosa 0.11.0 (ISC).
+Their original license texts are retained in LICENSES/.
+
+Modified behavior includes a dependency-light encoder without the predictor or
+masking branch, strict EMA-teacher subset loading, preserved unpooled 2D audio
+tokens, and shared audio/event execution with new interleaved KDA blocks.
+
+The KDA reference is an independent PyTorch implementation of the published
+Kimi Delta Attention recurrence and parameterization. Primary sources and
+engineering differences are documented in ARCHITECTURE.md. Optional fla-core
+is installed separately under its own license; its source is not vendored.
+
+No pretrained weights, chart or audio bytes are distributed here. Code licenses
+do not grant audio/chart redistribution or training rights. This notice does
+not relicense third-party components or imply that the entire repository has
+a uniform license.

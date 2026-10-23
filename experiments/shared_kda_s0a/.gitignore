@@ -1,0 +1,36 @@
+# Local environments, secrets, account evidence and execution state
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+.modal*
+*credentials*
+*token*
+*secret*
+*current-billing*
+reports/modal_assets.json
+reports/modal_session*.json
+reports/modal_result/
+reports/probe*.json
+teacher_fetch/reports/download_range_*
+teacher_fetch/reports/teacher_download_manifest.json
+# Never publish data or pretrained / trained weights
+inputs/
+data/
+weights/
+checkpoints/
+outputs/
+*.safetensors
+*.safetensors.partial
+*.pt
+*.pth
+*.ckpt
+*.mp3
+*.ogg
+*.wav
+*.flac
+*.mp4
+*.zip
+*.log

@@ -1,0 +1,21 @@
+{
+  "chart_key": "osu4k:4067533",
+  "title": "Higher",
+  "artist": "FIFTY FIFTY",
+  "creator": "fvrex",
+  "version": "Easy",
+  "source_url": "https://osu.ppy.sh/beatmapsets/1962553#mania/4067533",
+  "dataset": "https://huggingface.co/datasets/project-riz/osu-beatmaps",
+  "dataset_revision": "b82117a5de13b7df5290482aed7cffc49cb76e6d",
+  "chart_sha256": "08bf3b1402c9aa77d417d822a5a3d151c413338236d9f98399c1d8baf2ca9a6c",
+  "audio_sha256": "ffc5a731ccd5797e81e95fb75a8f575dc92c9cca6ab8116a17a8b1c65582cd98",
+  "human_authorship_evidence": "Named community mapper and original chart from pinned osu research dataset; source-reported authorship, not newly independently verified.",
+  "independent_audio_alignment_audit": "not_performed",
+  "gold": false,
+  "rights_status": "osu-terms; third-party chart/audio rights retained; no blanket training or redistribution grant verified",
+  "purpose": "S0 numerical probe candidate only, not timing ground truth validation",
+  "audio_path": "Higher.mp3",
+  "audio_bytes": 4128524,
+  "recommended_offset_seconds": 15,
+  "native_probe_duration_seconds": 10.24
+}

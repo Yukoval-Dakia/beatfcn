@@ -1,0 +1,10 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "beatfcn-native-data-bridge"
+version = "0.1.0"
+description = "Local architecture-neutral osu4K target bridge, not a model or trainer"
+requires-python = ">=3.10"
+dependencies = []
