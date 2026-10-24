@@ -156,6 +156,7 @@ class Corpus:
         self._rows = {}
         self._charts = {}
         self._salient = {}
+        self._info = {}
 
     def train_rows(self, rows):
         out = []
@@ -215,9 +216,14 @@ class Corpus:
         summary counts follow the encoder's window plan from the mel frame count."""
         from ..audio.memory import plan, SUMMARY_CELLS
         from ..model.batch import SongInfo
-        frames = npy_shape(os.path.join(self.root, 'mel10', f'{sha}.npy'))[0]
-        cells = plan(frames).cells
-        return SongInfo(sha, cells, -(-cells // SUMMARY_CELLS))
+        info = self._info.get(sha)
+        if info is None:  # one header read per song per worker (a resident song serves ~100 cores)
+            frames = npy_shape(os.path.join(self.root, 'mel10', f'{sha}.npy'))[0]
+            cells = plan(frames).cells
+            if len(self._info) > 4096:
+                self._info.clear()
+            info = self._info[sha] = SongInfo(sha, cells, -(-cells // SUMMARY_CELLS))
+        return info
 
     @property
     def tap_dim(self):
