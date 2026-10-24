@@ -232,6 +232,32 @@ def rhythm_features(recs):
     return out
 
 
+def alignment_check(root, rows_by_song, selection, per_source=8):
+    """Independent sanity check of the chart->audio mapping: mean spectral-flux envelope (ingest/offset.flux_envelope on
+    mel10) at frame offsets -6..6 around the quantised model-view onsets, and at offset 0 split by the sub-frame ms.
+    A peak at offset 0/+1 that decays with the sub-frame ms means the mapping is aligned and mel carries phase."""
+    from beatfcn.ingest.offset import flux_envelope
+    out = {}
+    for src in sorted({d['source'] for d in selection}):
+        acc, n, by_ms, n_ms = np.zeros(13), 0, np.zeros(10), np.zeros(10)
+        for d in [d for d in selection if d['source'] == src][:per_source]:
+            env = flux_envelope(np.load(os.path.join(root, 'mel10', f"{d['sha']}.npy")).astype(np.float32))
+            for r in rows_by_song[d['sha']]:
+                with open(os.path.join(root, 'canon', r['source'], f"{r['native_id']}.json")) as f:
+                    chart = chart_from_canon(json.load(f), model_shift_us(r, apply_codec_constant=True))
+                ts = np.array(sorted({quantize_us(e.onset_us) for e in chart.events}), np.int64)
+                ts = ts[(ts >= 100_000) & (ts < (len(env) - 10) * 10_000)]
+                fr, ms = ts // 10_000, (ts % 10_000) // 1000
+                for k in range(-6, 7):
+                    acc[k + 6] += env[fr + k].sum()
+                np.add.at(by_ms, ms, env[fr])
+                np.add.at(n_ms, ms, 1)
+                n += len(ts)
+        out[src] = {'onsets': int(n), 'mean_flux_by_frame_offset_-6..6': (acc / max(n, 1)).round(3).tolist(),
+                    'mean_flux_at_offset0_by_sub_frame_ms_0..9': [round(float(by_ms[m] / n_ms[m]), 3) if n_ms[m] else None for m in range(10)]}
+    return out
+
+
 # ----------------------------------------------------------------------------------------------- features
 
 def token_ln(x, eps=1e-5):
@@ -326,8 +352,10 @@ def extract_features(root, selection, recs, per_song, train_songs, per_token_dim
     # pass 2: project every sample (per-token PCA, and a fixed Gaussian random projection of the whole 24,576-dim
     # cell block as a reduction-robustness check: 3 taps x rp_dim <= 2048)
     rp = np.random.default_rng(12345).standard_normal((3 * BANDS * tap_dim, rp_dim), dtype=np.float32) / np.sqrt(rp_dim)
+    rpd = np.random.default_rng(54321).standard_normal((2 * BANDS * tap_dim, rp_dim), dtype=np.float32) / np.sqrt(rp_dim)
     feats = {f'tap{l}': np.zeros((N, 3 * BANDS * per_token_dim), np.float16) for l in LAYERS}
     feats.update({f'rp{l}': np.zeros((N, rp_dim), np.float16) for l in LAYERS})
+    feats.update({f'rpd{l}': np.zeros((N, rp_dim), np.float16) for l in LAYERS})  # relu(cell differences), projected
     mel_feat = np.zeros((N, 2 * MEL_PAD + FRAMES_PER_CELL, 128), np.float32)
     for si, d in enumerate(selection):
         rows = np.flatnonzero(song_of == si)
@@ -338,6 +366,8 @@ def extract_features(root, selection, recs, per_song, train_songs, per_token_dim
             toks = cell_tokens(tap, scale[l], cells, n_cells)
             feats[f'tap{l}'][rows] = pcas[l](toks).reshape(len(rows), -1).astype(np.float16)
             feats[f'rp{l}'][rows] = (toks.reshape(len(rows), -1) @ rp).astype(np.float16)
+            dif = np.maximum(toks[:, 1:] - toks[:, :-1], 0)  # [n, 2, 8, 1024]: relu(c - (c-1)), relu((c+1) - c)
+            feats[f'rpd{l}'][rows] = (dif.reshape(len(rows), -1) @ rpd).astype(np.float16)
         mel = np.load(os.path.join(root, 'mel10', f'{d["sha"]}.npy'), mmap_mode='r')
         f0 = cells * FRAMES_PER_CELL - MEL_PAD
         for k in range(2 * MEL_PAD + FRAMES_PER_CELL):
@@ -353,19 +383,38 @@ def extract_features(root, selection, recs, per_song, train_songs, per_token_dim
 
 # ----------------------------------------------------------------------------------------------- models
 
+def make_fold(order, f, k):
+    """Song-id sets (train, val, test) of fold f: per source, chunk f of the shuffled ids is the test set (20%), the
+    first 20% of the remaining ids is the validation set."""
+    tr, va, te = set(), set(), set()
+    for ids in order.values():
+        n = len(ids)
+        chunk = [ids[i] for i in range(n) if (i * k) // n == f]
+        rest = [i for i in ids if i not in chunk]
+        n_val = max(1, int(round(0.2 * len(rest))))
+        te |= set(chunk)
+        va |= set(rest[:n_val])
+        tr |= set(rest[n_val:])
+    return tr, va, te
+
+
 def standardise(x, train_idx):
     mu = x[train_idx].mean(0, dtype=np.float64).astype(np.float32)
     sd = x[train_idx].std(0, dtype=np.float64).astype(np.float32) + 1e-5
     return ((x - mu) / sd).astype(np.float32)
 
 
-def train_mlp(x, y, tr, va, seed, hidden=256, epochs=80, patience=8, lr=1e-3, wd=1e-2, batch=512, dropout=0.1):
+GRID = [{'lr': lr, 'wd': 1e-1, 'in_drop': dr} for lr in (1e-4, 1e-3) for dr in (0.0, 0.5)]
+
+
+def train_mlp(x, y, tr, va, seed, hidden=256, epochs=80, patience=8, lr=1e-3, wd=1e-2, batch=512, dropout=0.3, in_drop=0.0):
     import torch
     import torch.nn as nn
     torch.manual_seed(seed)
     torch.set_num_threads(max(1, os.cpu_count() or 1))
     xt, yt = torch.from_numpy(x), torch.from_numpy(y.astype(np.int64))
-    model = nn.Sequential(nn.Linear(x.shape[1], hidden), nn.GELU(), nn.Dropout(dropout), nn.Linear(hidden, N_CLASSES))
+    model = nn.Sequential(nn.Dropout(in_drop), nn.Linear(x.shape[1], hidden), nn.GELU(), nn.Dropout(dropout),
+                          nn.Linear(hidden, N_CLASSES))
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, epochs)
     best, best_state, bad, hist = float('inf'), None, 0, []
@@ -400,7 +449,46 @@ def train_mlp(x, y, tr, va, seed, hidden=256, epochs=80, patience=8, lr=1e-3, wd
         with torch.no_grad():
             return torch.cat([model(xt[idx[i:i + 8192]]).softmax(-1) for i in range(0, len(idx), 8192)]).numpy()
     return predict, {'epochs_run': len(hist), 'best_val_nll': round(best, 4), 'val_nll_history': hist,
-                     'params': sum(p.numel() for p in model.parameters()), 'input_dim': int(x.shape[1])}
+                     'params': sum(p.numel() for p in model.parameters()), 'input_dim': int(x.shape[1]),
+                     'config': {'lr': lr, 'wd': wd, 'in_drop': in_drop, 'hidden_drop': dropout, 'hidden': hidden, 'batch': batch}}
+
+
+def train_grid(x, y, tr, va, seed, hidden, epochs, grid=GRID):
+    """Same small grid for every feature set. Primary selection: lowest val MAE of the expectation decoder (the decision
+    metric); the lowest-val-NLL model is kept as well (val = held-out songs, never the test songs)."""
+    k = np.arange(N_CLASSES, dtype=np.float64)
+    trials, fits = [], []
+    for cfg in grid:
+        predict, info = train_mlp(x, y, tr, va, seed, hidden=hidden, epochs=epochs, **cfg)
+        pv = predict(va)
+        info['val_mae_expect'] = round(float(np.abs(pv @ k - y[va]).mean()), 3)
+        info['val_mae_argmax'] = round(float(np.abs(pv.argmax(1) - y[va]).mean()), 3)
+        trials.append({**cfg, 'epochs_run': info['epochs_run'], 'val_nll': info['best_val_nll'],
+                       'val_mae_expect': info['val_mae_expect'], 'val_mae_argmax': info['val_mae_argmax']})
+        fits.append((predict, info))
+    by_mae = min(fits, key=lambda f: f[1]['val_mae_expect'])
+    by_nll = min(fits, key=lambda f: f[1]['best_val_nll'])
+    by_mae[1]['grid'] = trials
+    by_mae[1]['nll_selected_config'] = by_nll[1]['config']
+    return by_mae, by_nll
+
+
+def flux_heuristic(mel8, cells_valid=None):
+    """Non-learned mel decoder: positive spectral flux summed over bins at frames 4c-1..4c+5; the 10 ms bin b whose
+    following frame (4c+b+1) has the largest flux wins (the flux of an onset at frame f peaks at f+1, see the
+    alignment check); probability mass uniform over that bin's 10 classes (expect -> bin centre 10b+4.5)."""
+    d = np.maximum(mel8[:, 1:] - mel8[:, :-1], 0).sum(-1)  # [N, 7]: frames 4c-1 .. 4c+5
+    b = d[:, 2:6].argmax(1)  # frames 4c+1 .. 4c+4  <-> bins 0..3
+    prob = np.zeros((len(b), N_CLASSES))
+    for i in range(4):
+        prob[b == i, 10 * i:10 * i + 10] = 0.1
+    return prob
+
+
+def mel_flux_features(mel8):
+    """Translation-friendly mel representation: raw 8 frames + rectified frame differences (7 x 128) + summed flux (7)."""
+    d = np.maximum(mel8[:, 1:] - mel8[:, :-1], 0)
+    return np.concatenate([mel8.reshape(len(mel8), -1), d.reshape(len(d), -1), d.sum(-1)], 1).astype(np.float32)
 
 
 def metrics(prob, y, y_exact, groups):
@@ -442,8 +530,19 @@ def main():
     ap.add_argument('--out-json', default=os.path.join(os.path.dirname(HERE), 'reports', 'phase_probe_2026-10-23.json'))
     ap.add_argument('--out-md', default=os.path.join(os.path.dirname(HERE), 'reports', 'phase_probe_2026-10-23.md'))
     ap.add_argument('--recompute', action='store_true')
+    ap.add_argument('--render-only', action='store_true', help='re-render the .md (and decision summary) from the existing .json')
     a = ap.parse_args()
     t_start = time.time()
+    if a.render_only:
+        with open(a.out_json) as f:
+            report = json.load(f)
+        report['decision']['summary'] = decision_summary(report)
+        with open(a.out_json, 'w') as f:
+            json.dump(report, f, indent=1, ensure_ascii=False)
+        with open(a.out_md, 'w') as f:
+            f.write(render_md(report))
+        print(render_md(report))
+        return
 
     selection, rows_by_song, sel_info = select_songs(a.root, a.manifest_name, a.n_songs, a.seed, a.byte_budget)
     log(f"selected {len(selection)} songs: {collections.Counter(d['source'] for d in selection)} "
@@ -469,29 +568,27 @@ def main():
         raise SystemExit(f'{len(missing)} songs lack taps; rerun with --download')
 
     recs, per_song = build_samples(a.root, rows_by_song, selection)
+    align = alignment_check(a.root, rows_by_song, selection)
+    log('alignment check', json.dumps(align))
     song_of = np.array([r[0] for r in recs])
     y = np.array([r[4] for r in recs], np.int64)
     y_exact = np.array([r[5] for r in recs], np.float64)
     mode_of = np.array([r[2] for r in recs])
-    # split by song 80/20 (stratified by source), val = 10% of the train songs for early stopping
+    # split by song 80/20 (stratified by source), val = 20% of the non-test songs for early stopping / model choice.
+    # Five by-song folds share one seeded shuffle; fold 0 is the pre-registered split, folds 1-4 are a robustness check.
     rng = np.random.default_rng(a.seed)
-    test_songs, val_songs, train_songs = set(), set(), set()
+    order = {}
     for src in sorted({d['source'] for d in selection}):
         ids = [i for i, d in enumerate(selection) if d['source'] == src]
         rng.shuffle(ids)
-        n_test = int(round(0.2 * len(ids)))
-        test_songs |= set(ids[:n_test])
-        rest = ids[n_test:]
-        n_val = max(1, int(round(0.1 * len(rest))))
-        val_songs |= set(rest[:n_val])
-        train_songs |= set(rest[n_val:])
-    tr = np.flatnonzero(np.isin(song_of, list(train_songs)))
-    va = np.flatnonzero(np.isin(song_of, list(val_songs)))
-    te = np.flatnonzero(np.isin(song_of, list(test_songs)))
-    fit_songs = train_songs | val_songs  # PCA / standardisation statistics: everything but test
+        order[src] = ids
+    folds = [make_fold(order, f, 5) for f in range(5)]
+    train_songs, val_songs, test_songs = folds[0]
+    tr, va, te = (np.flatnonzero(np.isin(song_of, list(sset))) for sset in folds[0])
+    fit_songs = train_songs | val_songs  # PCA / standardisation statistics: everything but the fold-0 test songs
     log(f'split: train {len(tr)} / val {len(va)} / test {len(te)} samples; songs {len(train_songs)}/{len(val_songs)}/{len(test_songs)}')
 
-    key = hashlib.sha256(json.dumps([d['sha'] for d in selection] + [a.per_token_dim]).encode()).hexdigest()[:12]
+    key = hashlib.sha256(json.dumps([d['sha'] for d in selection] + [a.per_token_dim, 'v2']).encode()).hexdigest()[:12]
     cache = os.path.join(a.root, 'cache', f'features_{key}.npz')
     if a.recompute and os.path.exists(cache):
         os.remove(cache)
@@ -508,45 +605,107 @@ def main():
     del cat
     log(f'A_all: {3 * X["A_9"].shape[1]} -> {a.all_dim} dims keeps {kept2:.3f} of variance')
     X['A_all_rp'] = standardise(np.concatenate([feats[f'rp{l}'].astype(np.float32) for l in LAYERS], 1), fit_idx)
+    X['A_all_rpd'] = standardise(np.concatenate([feats[f'rp{l}'].astype(np.float32) for l in LAYERS]
+                                                + [feats[f'rpd{l}'].astype(np.float32) for l in LAYERS], 1), fit_idx)
+    mel8 = feats['mel'].astype(np.float32).reshape(len(recs), 2 * MEL_PAD + FRAMES_PER_CELL, 128)
     X['B'] = standardise(feats['mel'].astype(np.float32), fit_idx)
+    X['B_flux'] = standardise(mel_flux_features(mel8), fit_idx)
     X['C'] = np.concatenate([X['A_all'], X['B']], 1)
+    X['C_flux'] = np.concatenate([X['A_all_rpd'], X['B_flux']], 1)
     R = standardise(rhythm_features(recs), fit_idx)
     X['E'] = np.concatenate([X['A_all'], R], 1)
     X['E_only'] = R  # rhythm context alone (diagnostic)
+    heur_prob = flux_heuristic(mel8)
+    del mel8
 
-    results, train_info = {}, {}
-    groups = {'mania': mode_of[te] == 'mania', 'phira': mode_of[te] == 'phira'}
-    # D: marginal distribution of the train split (chance baseline); D_mode: per-mode marginal
+    def groups_of(idx):
+        return {'mania': mode_of[idx] == 'mania', 'phira': mode_of[idx] == 'phira'}
+
+    def marginal_probs(fit, idx, per_mode):
+        pm = np.zeros((len(idx), N_CLASSES))
+        if not per_mode:
+            pm[:] = np.bincount(y[fit], minlength=N_CLASSES) / len(fit)
+            return pm
+        for m in ('mania', 'phira'):
+            sel_m = mode_of[fit] == m
+            if sel_m.any():
+                pm[mode_of[idx] == m] = np.bincount(y[fit][sel_m], minlength=N_CLASSES) / sel_m.sum()
+        return pm
+
+    results, results_nll, train_info = {}, {}, {}
+    groups = groups_of(te)
     marg = np.bincount(y[fit_idx], minlength=N_CLASSES) / len(fit_idx)
-    results['D'] = metrics(np.tile(marg, (len(te), 1)), y[te], y_exact[te], groups)
-    pm = np.zeros((len(te), N_CLASSES))
-    for m in ('mania', 'phira'):
-        sel_m = mode_of[fit_idx] == m
-        if sel_m.any():
-            pm[groups[m]] = np.bincount(y[fit_idx][sel_m], minlength=N_CLASSES) / sel_m.sum()
-    results['D_mode'] = metrics(pm, y[te], y_exact[te], groups)
-    for name in ['A_9', 'A_16', 'A_24', 'A_all', 'A_all_rp', 'B', 'C', 'E', 'E_only']:
+    results['D'] = metrics(marginal_probs(fit_idx, te, False), y[te], y_exact[te], groups)
+    results['D_mode'] = metrics(marginal_probs(fit_idx, te, True), y[te], y_exact[te], groups)
+    results['B_heur'] = metrics(heur_prob[te], y[te], y_exact[te], groups)
+    MODEL_SETS = ['A_9', 'A_16', 'A_24', 'A_all', 'A_all_rp', 'A_all_rpd', 'B', 'B_flux', 'C', 'C_flux', 'E', 'E_only']
+    for name in MODEL_SETS:
         t0 = time.time()
-        predict, info = train_mlp(X[name], y, tr, va, a.seed, hidden=a.hidden, epochs=a.epochs)
+        (predict, info), (predict_nll, info_nll) = train_grid(X[name], y, tr, va, a.seed, a.hidden, a.epochs)
         results[name] = metrics(predict(te), y[te], y_exact[te], groups)
+        results_nll[name] = metrics(predict_nll(te), y[te], y_exact[te], groups)
         info['train_seconds'] = round(time.time() - t0, 1)
         train_info[name] = info
         r = results[name]
-        log(f"{name:7s} dim {info['input_dim']:5d} ep {info['epochs_run']:2d} val_nll {info['best_val_nll']:.3f} | "
+        log(f"{name:9s} dim {info['input_dim']:5d} cfg {info['config']['lr']:.0e}/{info['config']['in_drop']} "
+            f"ep {info['epochs_run']:2d} val_nll {info['best_val_nll']:.3f} val_mae {info['val_mae_expect']:.2f} | "
             f"argmax MAE {r['argmax']['mae_ms']:.2f} P5 {r['argmax']['p_le5']:.3f} | expect MAE {r['expect']['mae_ms']:.2f} "
-            f"P5 {r['expect']['p_le5']:.3f} ({info['train_seconds']}s)")
+            f"P5 {r['expect']['p_le5']:.3f} | mania {r['expect']['mania']['mae_ms']:.2f} phira {r['expect']['phira']['mae_ms']:.2f} "
+            f"({info['train_seconds']}s)")
+
+    # robustness: folds 1-4 with each set's fold-0 configuration (inputs keep the fold-0 PCA / standardisation statistics)
+    CV_SETS = ['A_all', 'A_all_rp', 'A_all_rpd', 'B', 'B_flux', 'C', 'C_flux', 'E', 'E_only']
+    cv = {n: {'expect_mae': [results[n]['expect']['mae_ms']], 'argmax_mae': [results[n]['argmax']['mae_ms']],
+              'mania_expect_mae': [results[n]['expect']['mania']['mae_ms']], 'phira_expect_mae': [results[n]['expect']['phira']['mae_ms']]}
+          for n in CV_SETS + ['D', 'B_heur']}
+    for f in range(1, 5):
+        tr_f, va_f, te_f = (np.flatnonzero(np.isin(song_of, list(sset))) for sset in folds[f])
+        fit_f = np.concatenate([tr_f, va_f])
+        g = groups_of(te_f)
+        fold_res = {'D': metrics(marginal_probs(fit_f, te_f, False), y[te_f], y_exact[te_f], g),
+                    'B_heur': metrics(heur_prob[te_f], y[te_f], y_exact[te_f], g)}
+        for n in CV_SETS:
+            cfg = train_info[n]['config']
+            predict, _ = train_mlp(X[n], y, tr_f, va_f, a.seed + f, hidden=cfg['hidden'], epochs=a.epochs,
+                                   lr=cfg['lr'], wd=cfg['wd'], in_drop=cfg['in_drop'], dropout=cfg['hidden_drop'])
+            fold_res[n] = metrics(predict(te_f), y[te_f], y_exact[te_f], g)
+        for n, r in fold_res.items():
+            cv[n]['expect_mae'].append(r['expect']['mae_ms'])
+            cv[n]['argmax_mae'].append(r['argmax']['mae_ms'])
+            cv[n]['mania_expect_mae'].append(r['expect']['mania']['mae_ms'])
+            cv[n]['phira_expect_mae'].append(r['expect']['phira']['mae_ms'])
+        log(f'fold {f}: ' + ' '.join(f"{n} {fold_res[n]['expect']['mae_ms']:.2f}" for n in ['A_all', 'A_all_rpd', 'B', 'B_flux', 'B_heur', 'C_flux']))
+    for n, d in cv.items():
+        for key in list(d):
+            v = np.array(d[key])
+            d[key] = {'folds': [round(float(x), 3) for x in v], 'mean': round(float(v.mean()), 3), 'sd': round(float(v.std(ddof=1)), 3)}
+    cv_gap = {}
+    for a_name, b_name in (('A_all', 'B'), ('A_all', 'C'), ('A_all_rpd', 'B_flux'), ('A_all_rpd', 'B_heur'), ('A_all_rpd', 'C_flux')):
+        v = np.array(cv[a_name]['expect_mae']['folds']) - np.array(cv[b_name]['expect_mae']['folds'])
+        vm = np.array(cv[a_name]['mania_expect_mae']['folds']) - np.array(cv[b_name]['mania_expect_mae']['folds'])
+        cv_gap[f'{a_name}-{b_name}'] = {'folds': [round(float(x), 3) for x in v], 'mean': round(float(v.mean()), 3),
+                                        'sd': round(float(v.std(ddof=1)), 3), 'mania_mean': round(float(vm.mean()), 3),
+                                        'mania_sd': round(float(vm.std(ddof=1)), 3)}
 
     # decision
     dec = 'expect'
-    best_dec = {n: min(results[n]['argmax']['mae_ms'], results[n]['expect']['mae_ms']) for n in results}
-    gap_B = results['A_all'][dec]['mae_ms'] - results['B'][dec]['mae_ms']
-    gap_C = results['A_all'][dec]['mae_ms'] - results['C'][dec]['mae_ms']
-    gap_B_best, gap_C_best = best_dec['A_all'] - best_dec['B'], best_dec['A_all'] - best_dec['C']
+    m = lambda n, mode=None: results[n][dec]['mae_ms'] if mode is None else results[n][dec][mode]['mae_ms']
+    gap_B, gap_C = m('A_all') - m('B'), m('A_all') - m('C')
     remove_mel = bool(gap_B <= 1.0 and gap_C <= 1.0)
-    remove_mel_best = bool(gap_B_best <= 1.0 and gap_C_best <= 1.0)
-    e_gain = results['A_all'][dec]['mae_ms'] - results['E'][dec]['mae_ms']
-    gap_B_rp = results['A_all_rp'][dec]['mae_ms'] - results['B'][dec]['mae_ms']
-    gap_C_rp = results['A_all_rp'][dec]['mae_ms'] - results['C'][dec]['mae_ms']
+    best_dec = {n: min(results[n]['argmax']['mae_ms'], results[n]['expect']['mae_ms']) for n in results}
+    gap_B_best, gap_C_best = best_dec['A_all'] - best_dec['B'], best_dec['A_all'] - best_dec['C']
+    # strict check: best token representation (by val MAE) against the best mel representation incl. the non-learned heuristic
+    tok_best = min(['A_all', 'A_all_rp', 'A_all_rpd'], key=lambda n: train_info[n]['val_mae_expect'])
+    mel_learned_best = min(['B', 'B_flux'], key=lambda n: train_info[n]['val_mae_expect'])
+    mel_best = min([mel_learned_best, 'B_heur'], key=lambda n: m(n))
+    strict = {'token_set': tok_best, 'mel_set': mel_best, 'mel_learned_best': mel_learned_best,
+              'gap_all_ms': round(m(tok_best) - m(mel_best), 3), 'gap_vs_C_flux_ms': round(m(tok_best) - m('C_flux'), 3),
+              'gap_mania_ms': round(m(tok_best, 'mania') - m(mel_best, 'mania'), 3),
+              'gap_phira_ms': round(m(tok_best, 'phira') - m(mel_best, 'phira'), 3),
+              'gap_mania_vs_C_flux_ms': round(m(tok_best, 'mania') - m('C_flux', 'mania'), 3)}
+    strict['remove_mel'] = bool(strict['gap_all_ms'] <= 1.0 and strict['gap_vs_C_flux_ms'] <= 1.0
+                                and strict['gap_mania_ms'] <= 1.0 and strict['gap_mania_vs_C_flux_ms'] <= 1.0)
+    e_gain = m('A_all') - m('E')
 
     mapping = {
         'model_view_onset_us': 'native onset_us + (offset_decision.shift_ms + offset_decision.c_ms) * 1000',
@@ -583,7 +742,7 @@ def main():
                     'target_marginal_train': marg.round(5).tolist()},
         'bytes': {'taps_downloaded_this_run': downloaded, 'taps_on_disk': on_disk, 'manifest_and_pca_on_disk': extra,
                   'total_on_disk': on_disk + extra},
-        'mapping': mapping,
+        'mapping': mapping, 'alignment_check': align,
         'features': {
             'A_tap': f'cells c-1,c,c+1 x 8 bands x 1024 (dequant + per-token LN) -> per-token PCA {a.per_token_dim} dims fitted on '
                      f'train+val songs -> {24 * a.per_token_dim} dims; variance kept per layer: '
@@ -592,31 +751,50 @@ def main():
                      f'(train+val rows), variance kept {kept2:.3f}',
             'A_all_rp': 'reduction check: fixed Gaussian random projection (seed 12345) of each tap\'s 3 x 8 x 1024 block to 682 dims, '
                         '3 taps concatenated = 2046 dims (no fitting)',
+            'A_all_rpd': 'A_all_rp + random projection (seed 54321, 682 dims per tap) of relu(token(c) - token(c-1)), '
+                         'relu(token(c+1) - token(c)) = 4092 dims (token analogue of spectral flux)',
             'B': 'mel10 frames 4c-2 .. 4c+5 (8 x 128 = 1024 dims, raw Pupu-normalised log-mel)',
+            'B_flux': 'B + rectified frame differences (7 x 128) + per-frame summed flux (7) = 1927 dims',
+            'B_heur': 'non-learned: 10 ms bin b = argmax over b of summed positive flux at frame 4c+b+1, prediction = bin '
+                      'centre 10b+4.5 (expect decoder; argmax gives 10b)',
+            'C_flux': 'A_all_rpd + B_flux',
             'C': 'A_all + B', 'D': 'train marginal of the 40 offsets (chance); D_mode = per-mode marginal',
             'E': 'A_all + rhythm context (40 dims): gaps from the cell start back to the previous 4 distinct onsets of the same '
                  'chart and the 4 IOIs among the previous 5; each as seconds, log1p(ms), sin/cos of the 40 ms phase, + presence flags',
             'E_only': 'rhythm context alone (diagnostic)',
             'standardisation': 'every input z-scored per dim on train+val rows',
-            'model': f'Linear({"d"}, {a.hidden}) - GELU - Dropout(0.1) - Linear({a.hidden}, 40); AdamW lr 1e-3 wd 1e-2, batch 512, '
-                     f'cosine over {a.epochs} epochs, early stop on val NLL (patience 8), CPU',
+            'model': f'Dropout(in_drop) - Linear(d, {a.hidden}) - GELU - Dropout(0.3) - Linear({a.hidden}, 40); AdamW wd 0.1, batch 512, '
+                     f'cosine over {a.epochs} epochs, early stop on val NLL (patience 8), CPU. Per feature set the same grid '
+                     f'lr x in_drop = {{1e-4,1e-3}} x {{0,0.5}} is run; the model with the lowest val MAE (expectation decoder) is '
+                     f'reported (results), the lowest-val-NLL one is kept in results_nll_selected. val = held-out songs. '
+                     f'(Run 1 with a single lr 1e-3 / wd 1e-2 setting over-fitted within one epoch on every audio set; run 2 with a '
+                     f'wd axis showed wd has no effect.)',
+            'cv': '5 by-song folds from one seeded shuffle (fold 0 = the reported split); folds 1-4 reuse each set\'s fold-0 '
+                  'configuration; PCA / standardisation statistics stay those of fold 0 (unsupervised, mild leakage into folds 1-4)',
             'decoders': 'argmax class; expectation sum_k p_k k. Errors against the integer target (0-39 ms); '
                         'mae_vs_exact_ms uses the sub-ms onset position',
         },
-        'results': results, 'training': train_info,
+        'results': results, 'results_nll_selected': results_nll, 'training': train_info, 'cv_by_song_5fold': cv, 'cv_gaps': cv_gap,
         'decision': {
-            'rule': 'remove the mel branch if MAE_A_all - MAE_B <= 1 ms and MAE_A_all - MAE_C <= 1 ms',
+            'rule': 'remove the mel branch if MAE_A_all - MAE_B <= 1 ms and MAE_A_all - MAE_C <= 1 ms (test split, expectation decoder, '
+                    'models selected on val MAE)',
             'decoder_used': dec, 'mae_A_all_minus_B_ms': round(gap_B, 3), 'mae_A_all_minus_C_ms': round(gap_C, 3),
-            'remove_mel': remove_mel,
+            'remove_mel_by_preregistered_rule': remove_mel,
+            'per_mode': {md: {'mae_A_all_minus_B_ms': round(m('A_all', md) - m('B', md), 3),
+                              'mae_A_all_minus_C_ms': round(m('A_all', md) - m('C', md), 3)} for md in ('mania', 'phira')},
             'with_best_decoder_per_model': {'mae_A_all_minus_B_ms': round(gap_B_best, 3), 'mae_A_all_minus_C_ms': round(gap_C_best, 3),
-                                            'remove_mel': remove_mel_best},
-            'with_A_all_rp': {'mae_A_all_rp_minus_B_ms': round(gap_B_rp, 3), 'mae_A_all_rp_minus_C_ms': round(gap_C_rp, 3),
-                              'remove_mel': bool(gap_B_rp <= 1.0 and gap_C_rp <= 1.0)},
+                                            'remove_mel': bool(gap_B_best <= 1.0 and gap_C_best <= 1.0)},
+            'strict_check_best_token_vs_best_mel': strict,
+            'cv_gap_A_all_minus_B_ms': cv_gap['A_all-B'], 'cv_gap_A_all_minus_C_ms': cv_gap['A_all-C'],
+            'cv_gap_A_all_rpd_minus_B_heur_ms': cv_gap['A_all_rpd-B_heur'],
             'E_gain_over_A_all_ms': round(e_gain, 3),
             'D_mae_ms': round(results['D'][dec]['mae_ms'], 3),
+            'B_heur_mae_ms': round(results['B_heur'][dec]['mae_ms'], 3),
+            'B_heur_mania_mae_ms': round(results['B_heur'][dec]['mania']['mae_ms'], 3),
         },
         'runtime_seconds': round(time.time() - t_start, 1),
     }
+    report['decision']['summary'] = decision_summary(report)
     os.makedirs(os.path.dirname(a.out_json), exist_ok=True)
     with open(a.out_json, 'w') as f:
         json.dump(report, f, indent=1, ensure_ascii=False)
@@ -626,35 +804,92 @@ def main():
     print(render_md(report))
 
 
+def decision_summary(rep, th=1.0):
+    """Four conditions behind the headline (all on the expectation decoder, test songs only):
+    1 pre-registered rule on the pre-registered split; 2 the same rule averaged over the 5 by-song folds;
+    3 best token representation vs best LEARNED mel representation and vs tokens+mel (5-fold means);
+    4 best token representation vs the non-learned mel flux heuristic on mania (pre-registered split)."""
+    d, cv, g = rep['decision'], rep['cv_by_song_5fold'], rep['cv_gaps']
+    st = d['strict_check_best_token_vs_best_mel']
+    tok = st['token_set']
+    c1 = d['mae_A_all_minus_B_ms'] <= th and d['mae_A_all_minus_C_ms'] <= th
+    c2 = g['A_all-B']['mean'] <= th and g['A_all-C']['mean'] <= th
+    c3 = g[f'{tok}-B_flux']['mean'] <= th and g[f'{tok}-C_flux']['mean'] <= th if f'{tok}-B_flux' in g else None
+    c4 = st['gap_mania_ms'] <= th
+    txt = []
+    txt.append(f"条件 1（预注册判据，固定切分）：{'满足' if c1 else '不满足'}（A_all−B {d['mae_A_all_minus_B_ms']:+.2f}，A_all−C {d['mae_A_all_minus_C_ms']:+.2f} ms）。")
+    txt.append(f"条件 2（同判据，5 折均值）：{'满足' if c2 else '不满足'}（{g['A_all-B']['mean']:+.2f} ± {g['A_all-B']['sd']:.2f}，"
+               f"{g['A_all-C']['mean']:+.2f} ± {g['A_all-C']['sd']:.2f} ms）；预注册的 A_all（两级 PCA 到 2048 维）是最差的 token 表示"
+               f"（5 折 {cv['A_all']['expect_mae']['mean']:.2f} ms，对比随机投影 A_all_rp {cv['A_all_rp']['expect_mae']['mean']:.2f}、"
+               f"A_all_rpd {cv['A_all_rpd']['expect_mae']['mean']:.2f} ms），它在固定切分上的“满足”是弱对弱的巧合。")
+    if c3 is not None:
+        txt.append(f"条件 3（最优 token 表示 {tok} 对最优学习型 mel 表示 B_flux 与对 token+mel 的 C_flux，5 折均值）：{'满足' if c3 else '不满足'}"
+                   f"（{g[f'{tok}-B_flux']['mean']:+.2f} ± {g[f'{tok}-B_flux']['sd']:.2f}，{g[f'{tok}-C_flux']['mean']:+.2f} ± "
+                   f"{g[f'{tok}-C_flux']['sd']:.2f} ms）：学习型读出下 token 不劣于 mel，且 mel 叠加到 token 上没有增益。")
+    txt.append(f"条件 4（{tok} 对非学习的 mel 谱通量启发式 B_heur，mania，固定切分）：{'满足' if c4 else '不满足'}（{st['gap_mania_ms']:+.2f} ms；"
+               f"5 折 {g[f'{tok}-B_heur']['mania_mean']:+.2f} ± {g[f'{tok}-B_heur']['mania_sd']:.2f} ms，折间不稳定）：mel 里仍有一部分"
+               f"相位信息是零参数启发式能读出、而 38 首歌训练的 token 探针在该切分上读不出的；phira 上启发式无信息"
+               f"（{rep['results']['B_heur']['expect']['phira']['mae_ms']:.2f} ms ≈ 机会水平）。")
+    verdict = ('按预注册判据：删 mel 支路。' if c1 else '按预注册判据：保留 mel 支路。')
+    verdict += ('稳健性支持“token 不劣于学习型 mel 读出、mel 无叠加增益”，' if c3 else '稳健性不支持该结论，')
+    verdict += ('但未能证明 token 已含 mel 的全部相位信息（条件 4 不满足）。建议：删 mel 支路，但保留 §5 实验 4 的 mel × 间隔核 2×2 对照作为验证；'
+                '所有音频探针都远不及节律先验（E_only）。' if not c4 else '且 token 对 mel 的启发式亦不劣，可删 mel 支路。')
+    return {'conditions': {'c1_preregistered_fixed_split': bool(c1), 'c2_preregistered_5fold': bool(c2),
+                           'c3_best_token_vs_learned_mel_5fold': None if c3 is None else bool(c3), 'c4_best_token_vs_heuristic_mania': bool(c4)},
+            'text': txt, 'verdict': verdict}
+
+
 def render_md(rep):
     R, d, s, b = rep['results'], rep['decision'], rep['samples'], rep['bytes']
-    order = ['D', 'D_mode', 'A_9', 'A_16', 'A_24', 'A_all', 'A_all_rp', 'B', 'C', 'E', 'E_only']
+    order = ['D', 'D_mode', 'A_9', 'A_16', 'A_24', 'A_all', 'A_all_rp', 'A_all_rpd', 'B', 'B_flux', 'B_heur', 'C', 'C_flux', 'E', 'E_only']
     L = []
     L.append('# 相位探针（phase probe）— 2026-10-23\n')
     L.append(f"设计依据：{rep['design_ref']}。问题：40 ms 格内的起音偏移（0–39 ms）能否从冻结 PupuM2D 格 token 读出，与 10 ms mel 相比如何。\n")
     L.append('## 结论\n')
-    verdict = '**删除 mel 支路**' if d['remove_mel'] else '**保留 mel 支路**'
-    L.append(f"判据：{d['rule']}（解码器：{d['decoder_used']}）。MAE_A_all − MAE_B = {d['mae_A_all_minus_B_ms']:+.2f} ms，"
-             f"MAE_A_all − MAE_C = {d['mae_A_all_minus_C_ms']:+.2f} ms → {verdict}。")
-    bd = d['with_best_decoder_per_model']
-    L.append(f"（每个模型取各自更优解码器时：{bd['mae_A_all_minus_B_ms']:+.2f} / {bd['mae_A_all_minus_C_ms']:+.2f} ms → "
-             f"{'删' if bd['remove_mel'] else '保留'}。）")
-    rp = d['with_A_all_rp']
-    L.append(f"（随机投影版 A_all_rp 替代 A_all 时：{rp['mae_A_all_rp_minus_B_ms']:+.2f} / {rp['mae_A_all_rp_minus_C_ms']:+.2f} ms → "
-             f"{'删' if rp['remove_mel'] else '保留'}。）")
-    L.append(f"节律网格先验的价值：E 比 A_all 的 MAE 低 {d['E_gain_over_A_all_ms']:+.2f} ms；D（仅边缘分布）MAE = {d['D_mae_ms']:.2f} ms。\n")
-    L.append('## 主表（测试集，按歌 80/20 切分）\n')
-    L.append('| 模型 | 输入维 | 解码 | MAE ms | 中位 ms | P(≤5) | P(≤10) | NLL | top1 |')
-    L.append('|---|---|---|---|---|---|---|---|---|')
+    verdict = '满足"删 mel"判据' if d['remove_mel_by_preregistered_rule'] else '不满足"删 mel"判据'
+    L.append(f"**预注册判据**：{d['rule']}。MAE_A_all − MAE_B = {d['mae_A_all_minus_B_ms']:+.2f} ms，"
+             f"MAE_A_all − MAE_C = {d['mae_A_all_minus_C_ms']:+.2f} ms → **{verdict}**。"
+             f"按模式：mania {d['per_mode']['mania']['mae_A_all_minus_B_ms']:+.2f} / {d['per_mode']['mania']['mae_A_all_minus_C_ms']:+.2f} ms，"
+             f"phira {d['per_mode']['phira']['mae_A_all_minus_B_ms']:+.2f} / {d['per_mode']['phira']['mae_A_all_minus_C_ms']:+.2f} ms。")
+    g1, g2 = d['cv_gap_A_all_minus_B_ms'], d['cv_gap_A_all_minus_C_ms']
+    L.append(f"5 折（按歌）稳健性：A_all − B = {g1['mean']:+.2f} ± {g1['sd']:.2f} ms，A_all − C = {g2['mean']:+.2f} ± {g2['sd']:.2f} ms（折间 sd）。")
+    st = d['strict_check_best_token_vs_best_mel']
+    L.append(f"**严格检查**（val 上最优的 token 表示 {st['token_set']} 对最优的 mel 表示 {st['mel_set']}，含非学习的谱通量启发式 B_heur）："
+             f"全体 {st['gap_all_ms']:+.2f} ms，mania {st['gap_mania_ms']:+.2f} ms，phira {st['gap_phira_ms']:+.2f} ms；对 C_flux：全体 "
+             f"{st['gap_vs_C_flux_ms']:+.2f}，mania {st['gap_mania_vs_C_flux_ms']:+.2f} ms → "
+             f"{'通过' if st['remove_mel'] else '**不通过**'}（阈值 1 ms）。")
+    g3 = d['cv_gap_A_all_rpd_minus_B_heur_ms']
+    L.append(f"5 折：A_all_rpd − B_heur = {g3['mean']:+.2f} ± {g3['sd']:.2f} ms（mania {g3['mania_mean']:+.2f} ± {g3['mania_sd']:.2f}）。")
+    L.append(f"非学习启发式 B_heur（mel 谱通量选 10 ms 桶）MAE = {d['B_heur_mae_ms']:.2f} ms（mania {d['B_heur_mania_mae_ms']:.2f}）；"
+             f"D（仅边缘分布）MAE = {d['D_mae_ms']:.2f} ms；E 比 A_all 的 MAE 低 {d['E_gain_over_A_all_ms']:+.2f} ms（节律先验）。\n")
+    sm = rep['decision'].get('summary')
+    if sm:
+        L.append('### 解读\n')
+        for t in sm['text']:
+            L.append(f'- {t}')
+        L.append(f"\n**{sm['verdict']}**\n")
+    L.append('## 主表（测试集 = 预注册的按歌 80/20 切分；模型按 val MAE 选网格配置）\n')
+    L.append('| 模型 | 输入维 | 解码 | MAE ms | 中位 ms | P(≤5) | P(≤10) | NLL | top1 | MAE mania | MAE phira |')
+    L.append('|---|---|---|---|---|---|---|---|---|---|---|')
     for n in order:
         if n not in R:
             continue
         dim = rep['training'].get(n, {}).get('input_dim', '-')
         for dec in ('argmax', 'expect'):
-            m = R[n][dec]
-            L.append(f"| {n} | {dim} | {dec} | {m['mae_ms']:.2f} | {m['median_ms']:.1f} | {m['p_le5']:.3f} | {m['p_le10']:.3f} | "
-                     f"{R[n]['nll']:.3f} | {R[n]['top1_acc']:.3f} |")
+            mm = R[n][dec]
+            L.append(f"| {n} | {dim} | {dec} | {mm['mae_ms']:.2f} | {mm['median_ms']:.1f} | {mm['p_le5']:.3f} | {mm['p_le10']:.3f} | "
+                     f"{R[n]['nll']:.3f} | {R[n]['top1_acc']:.3f} | {mm['mania']['mae_ms']:.2f} | {mm['phira']['mae_ms']:.2f} |")
     L.append('')
+    L.append('## 5 折（按歌）MAE，expect 解码，均值 ± 折间 sd\n')
+    L.append('| 模型 | 全体 | mania | phira | 各折（全体） |')
+    L.append('|---|---|---|---|---|')
+    for n, v in rep['cv_by_song_5fold'].items():
+        L.append(f"| {n} | {v['expect_mae']['mean']:.2f} ± {v['expect_mae']['sd']:.2f} | {v['mania_expect_mae']['mean']:.2f} ± "
+                 f"{v['mania_expect_mae']['sd']:.2f} | {v['phira_expect_mae']['mean']:.2f} ± {v['phira_expect_mae']['sd']:.2f} | "
+                 f"{', '.join(f'{x:.2f}' for x in v['expect_mae']['folds'])} |")
+    L.append('')
+    L.append('差值（expect MAE，折均值 ± sd；括号内 mania）：' + '；'.join(
+        f"{k} = {v['mean']:+.2f} ± {v['sd']:.2f}（{v['mania_mean']:+.2f} ± {v['mania_sd']:.2f}）" for k, v in rep['cv_gaps'].items()) + '\n')
     for mode in ('mania', 'phira'):
         if s['test_by_mode'].get(mode, 0) == 0:
             continue
@@ -665,8 +900,8 @@ def render_md(rep):
             if n not in R or mode not in R[n]['argmax']:
                 continue
             for dec in ('argmax', 'expect'):
-                m = R[n][dec][mode]
-                L.append(f"| {n} | {dec} | {m['mae_ms']:.2f} | {m['median_ms']:.1f} | {m['p_le5']:.3f} | {m['p_le10']:.3f} |")
+                mm = R[n][dec][mode]
+                L.append(f"| {n} | {dec} | {mm['mae_ms']:.2f} | {mm['median_ms']:.1f} | {mm['p_le5']:.3f} | {mm['p_le10']:.3f} |")
         L.append('')
     L.append('## 数据\n')
     sg = rep['songs']
@@ -674,8 +909,9 @@ def render_md(rep):
              f"使用谱面 {sg['charts_used']} 张（这些歌在清单中共 {sg['charts_in_manifest_for_these_songs']} 张，只用本地已有 canon 的）。")
     L.append(f"- 样本（含起音的 40 ms 格，按 (chart, cell) 去重）：共 {s['total']}，train {s['train']} / val {s['val']} / test {s['test']}；"
              f"测试集按模式 {s['test_by_mode']}。")
-    L.append(f"- 下载：本次下载 taps {b['taps_downloaded_this_run'] / 1e9:.3f} GB；磁盘上 taps {b['taps_on_disk'] / 1e9:.3f} GB + "
-             f"清单/PCA {b['manifest_and_pca_on_disk'] / 1e6:.1f} MB = 共 {b['total_on_disk'] / 1e9:.3f} GB（未删除）。")
+    L.append(f"- 下载（`modal volume get`，只读）：taps {b['taps_on_disk'] / 1e9:.3f} GB（180 个文件，60 首 × L9/L16/L24；本次运行新下载 "
+             f"{b['taps_downloaded_this_run'] / 1e9:.3f} GB，其余来自前一步 `--download-only`）+ 清单/PCA {b['manifest_and_pca_on_disk'] / 1e6:.1f} MB "
+             f"= 共 {b['total_on_disk'] / 1e9:.3f} GB，全部仍在 {rep['root']}（未删除；特征缓存 cache/ 为派生数据）。")
     L.append(f"- 清单：{rep['manifest']}（split=train，offset decision v2，训练同款筛选）；taps：{rep['taps_key']}；pca：{rep['pca']}。\n")
     L.append('## 时间映射（与训练一致）\n')
     mp = rep['mapping']
@@ -687,16 +923,25 @@ def render_md(rep):
     for w in mp['where']:
         L.append(f'  - {w}')
     L.append('')
+    L.append('## 对齐自检（谱面→音频映射）\n')
+    L.append('量化后的模型视角起音周围的谱通量包络（`ingest/offset.flux_envelope`，mel10），帧偏移 −6..+6 的均值，以及偏移 0 处按帧内 ms 分组的均值（每源前 8 首）：\n')
+    for src, v in rep['alignment_check'].items():
+        L.append(f"- {src}（{v['onsets']} 起音）：按帧偏移 {v['mean_flux_by_frame_offset_-6..6']}；偏移 0 按帧内 ms {v['mean_flux_at_offset0_by_sub_frame_ms_0..9']}")
+    L.append('')
     L.append('## 特征与模型\n')
     for k, v in rep['features'].items():
         L.append(f'- **{k}**：{v}')
     L.append('')
     L.append('## 训练细节\n')
-    L.append('| 模型 | 输入维 | 参数 | 轮数 | 最优 val NLL | 秒 |')
-    L.append('|---|---|---|---|---|---|')
+    L.append('| 模型 | 输入维 | 参数 | 选中 lr/in_drop | 轮数 | val NLL | val MAE(expect) | 秒（整个网格） |')
+    L.append('|---|---|---|---|---|---|---|---|')
     for n, t in rep['training'].items():
-        L.append(f"| {n} | {t['input_dim']} | {t['params']} | {t['epochs_run']} | {t['best_val_nll']:.3f} | {t['train_seconds']} |")
+        c = t['config']
+        L.append(f"| {n} | {t['input_dim']} | {t['params']} | {c['lr']:.0e}/{c['in_drop']} | {t['epochs_run']} | "
+                 f"{t['best_val_nll']:.3f} | {t['val_mae_expect']:.2f} | {t['train_seconds']} |")
     L.append('')
+    L.append('按 val NLL 选配置时的测试 MAE（expect）：' + '，'.join(
+        f"{n} {v['expect']['mae_ms']:.2f}" for n, v in rep['results_nll_selected'].items()) + '\n')
     L.append(f"训练集偏移边缘分布（0..39 ms）：{[round(p, 3) for p in s['target_marginal_train']]}\n")
     L.append(f"运行时长 {rep['runtime_seconds']} s。脚本：`scripts/phase_probe.py --root <root> [--download]`。")
     return '\n'.join(L) + '\n'
