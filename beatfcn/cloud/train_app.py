@@ -350,11 +350,13 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
                                  for l in taps]).clone().to(torch.device(device))
     raw_it, queue = iter(stream), deque()
     util_hist = deque(maxlen=8)
-    # attach_audio launches ~300 small kernels per micro-batch; on the main stream they queue behind the previous
-    # step's graph replay and the launch queue fills, blocking the main thread until the replay drains (attach
-    # time ~= GPU time, ~50% utilisation). A dedicated stream gives them their own queue; the main stream waits
-    # for the attach event (GPU-side) before its copies read the attached tensors.
-    attach_stream = torch.cuda.Stream() if device == 'cuda' else None
+    def attach(bt, out=None):
+        """Audio for a metadata batch from the resident songs, into a tier slot's static buffers when given (no
+        transient allocation per micro-batch: the churn fragmented the allocator up to the 80 GB limit, where
+        every new allocation freed cached segments with a device sync)."""
+        t = time.time()
+        attach_audio(bt, pool.get, device, scale_dev, out=out)
+        dstat['attach_s'] += time.time() - t
     dstat = {'dl_s': 0.0, 'attach_s': 0.0, 'write_s': 0.0, 'worker_s': 0.0, 'worker_max_s': 0.0, 'batches': 0, 'queue_empty': 0}
     worker_audits = {}
     samples_file = open(f'{runs[0].dir}/samples.jsonl', 'a', buffering=1 << 20)  # volume writes: flush rarely
@@ -376,19 +378,7 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
         if audit:
             worker_audits[audit['worker']] = audit['attempts']
         ws = b.pop('_worker_s', 0.0)
-        keys = list(b['_audio']['keys'])
-        if attach_stream is not None:
-            main = torch.cuda.current_stream()
-            attach_stream.wait_stream(main)
-            with torch.cuda.stream(attach_stream):
-                attach_audio(b, pool.get, device, scale_dev)
-            main.wait_stream(attach_stream)
-            for v in b.values():  # attached tensors were allocated on the attach stream; the main stream reads them
-                if torch.is_tensor(v) and v.is_cuda:
-                    v.record_stream(main)
-        else:
-            attach_audio(b, pool.get, device, scale_dev)
-        pool.release(keys)
+        b['_keys'] = list(b['_audio']['keys'])  # released after the step consumed the batch
         t2 = time.time()
         samples_file.write(json.dumps(b.pop('_provenance', [])) + '\n')
         t3 = time.time()
@@ -456,7 +446,7 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
                                                      batch_size=None, num_workers=4, prefetch_factor=2, persistent_workers=True))
     mon = GpuUtil()  # nvidia-smi utilisation per log interval (what the Modal dashboard shows)
     from beatfcn.train.graph import TieredStep
-    gs = TieredStep(runs, tc.clip, dev, capture=cuda, before_capture=pool.wait_idle, max_graphs=max_graphs) if graph else None
+    gs = TieredStep(runs, tc.clip, dev, capture=cuda, before_capture=pool.wait_idle, max_graphs=max_graphs, attach=attach) if graph else None
     examples, wait_s, gpu_s, t_loop, aborted = 0, 0.0, 0.0, time.time(), None
     end = min(stop_at, tc.steps) if stop_at else tc.steps
 
@@ -507,6 +497,8 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
             if cf_due:
                 cf_step(step)
             mets, norms = gs.step(batches, w_sel)
+            for b in batches:
+                pool.release(b.pop('_keys', ()))
             for r, met, gn in zip(runs, mets, norms):
                 merge(r.acc, met)
                 r.gn = gn
@@ -516,7 +508,10 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
             for _ in range(tc.accumulation):
                 tw = time.time()
                 bt, skipped = next(it)
+                keys = bt.pop('_keys', ())
+                attach(bt)
                 bt = to_device(bt, dev)
+                pool.release(keys)
                 tg = time.time()
                 wait_s += tg - tw
                 for r in runs:  # same micro-batch for every paired run

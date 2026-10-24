@@ -362,29 +362,51 @@ def _gather_rows(t, starts, n, out, sl):
     return out
 
 
-def attach_audio(bt: dict, get_song, device='cpu', scales=None, mel=False) -> dict:
+AUDIO_KEYS = ('audio', 'song_cells', 'ref_audio', 'hold_blocks', 'hold_detail')
+
+
+def audio_buffers(recipe: dict, B: int, tier: dict, device) -> dict:
+    """The device buffers attach_audio fills for a shape tier (allocated once per static slot; attach_audio
+    writes into them every step instead of allocating ~0.5 GB of transient tensors per micro-batch)."""
+    T, Dt, D_sum = len(recipe['taps']), recipe['Dt'], recipe['D_sum']
+    tdt = torch.int8 if recipe['quant'] else torch.float32
+    dev = torch.device(device)
+    return {'audio': torch.zeros(B, T, F.LOCAL_CELLS, 8, Dt, dtype=tdt, device=dev),
+            'song_cells': torch.zeros(B, SONG_TAPS, tier['C'] // F.STREAM_STRIDE, 8, Dt, dtype=tdt, device=dev),
+            'ref_audio': torch.zeros(B, tier['R'], T, 8, Dt, dtype=tdt, device=dev),
+            'hold_blocks': torch.zeros(tier['H'], F.MAX_END_BLOCKS, 8, D_sum, dtype=torch.float16, device=dev),
+            'hold_detail': torch.zeros(tier['H'], END_BLOCK_CELLS, 8, Dt, dtype=tdt, device=dev)}
+
+
+def attach_audio(bt: dict, get_song, device='cpu', scales=None, mel=False, out=None) -> dict:
     """Fill the audio tensors of a collate_meta batch from song caches: get_song(key) -> object with .taps
     (layer -> tensor [cells,8,Dt], int8 raw when quantised), .summary [S,8,D] and .mel10 [frames,128] on
     `device`. scales: {layer: per-dim scale} (or a stacked [T, Dt] device tensor) for int8 taps. Runs on
     the GPU in training, so only metadata leaves the worker processes. mel: also attach the local mel10
-    window (S2 and diagnostics; the v2.1 model does not read it)."""
+    window (S2 and diagnostics; the v2.1 model does not read it). out: static buffers (audio_buffers) to
+    write into, at least as large as this batch along the padded axes; rows beyond the batch are zeroed."""
     r = bt.pop('_audio')
     taps, top, Dt, quant = r['taps'], r['top'], r['Dt'], r['quant']
     B, R, C, Hp = len(r['keys']), r['R'], r['C'], r['Hp']
     tdt = torch.int8 if quant else torch.float32
     dev = torch.device(device)
-    audio = torch.zeros(B, len(taps), F.LOCAL_CELLS, 8, Dt, dtype=tdt, device=dev)
     song_taps = taps[-SONG_TAPS:]
-    song_cells = torch.zeros(B, len(song_taps), C // F.STREAM_STRIDE, 8, Dt, dtype=tdt, device=dev)
-    ref_audio = torch.zeros(B, R, len(taps), 8, Dt, dtype=tdt, device=dev)
-    blocks = torch.zeros(Hp, F.MAX_END_BLOCKS, 8, r['D_sum'], dtype=torch.float16, device=dev)
-    detail = torch.zeros(Hp, END_BLOCK_CELLS, 8, Dt, dtype=tdt, device=dev)
+    if out is None:
+        audio = torch.zeros(B, len(taps), F.LOCAL_CELLS, 8, Dt, dtype=tdt, device=dev)
+        song_cells = torch.zeros(B, len(song_taps), C // F.STREAM_STRIDE, 8, Dt, dtype=tdt, device=dev)
+        ref_audio = torch.zeros(B, R, len(taps), 8, Dt, dtype=tdt, device=dev)
+        blocks = torch.zeros(Hp, F.MAX_END_BLOCKS, 8, r['D_sum'], dtype=torch.float16, device=dev)
+        detail = torch.zeros(Hp, END_BLOCK_CELLS, 8, Dt, dtype=tdt, device=dev)
+    else:
+        audio, song_cells, ref_audio, blocks, detail = (out[k] for k in AUDIO_KEYS)
+        for t in (ref_audio, blocks, detail):  # padding rows must be zero (song_cells / audio are fully written)
+            t.zero_()
     songs = [get_song(k) for k in r['keys']]
     for b, (song, c0, (start, _)) in enumerate(zip(songs, r['cell0'], r['crops'])):
         for j, l in enumerate(taps):
             _dslice(song.taps[l], c0, F.LOCAL_CELLS, audio[b, j])
         for j, l in enumerate(song_taps):
-            _dslice_strided(song.taps[l], start, C, F.STREAM_STRIDE, song_cells[b, j])
+            _dslice_strided(song.taps[l], start, song_cells.shape[2] * F.STREAM_STRIDE, F.STREAM_STRIDE, song_cells[b, j])
     if mel:
         m = torch.zeros(B, FRAMES_LOCAL, 128, dtype=torch.float16, device=dev)
         for b, (song, c0) in enumerate(zip(songs, r['cell0'])):

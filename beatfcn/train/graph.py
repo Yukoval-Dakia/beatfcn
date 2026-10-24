@@ -10,7 +10,7 @@ tensors (zero_grad(set_to_none=False) runs at the end of the step). `capture=Fal
 """
 from __future__ import annotations
 import torch
-from ..model.batch import TIERS, AXIS, PAD_VALUE, batch_dims, tier_of, tier_shape
+from ..model.batch import TIERS, AXIS, PAD_VALUE, AUDIO_KEYS, audio_buffers, batch_dims, tier_of, tier_shape
 
 
 class _Tier:
@@ -21,7 +21,8 @@ class _Tier:
 
 
 class TieredStep:
-    def __init__(self, runs, clip: float, device, capture=True, warmup=3, before_capture=None, tiers=TIERS, max_graphs=2):
+    def __init__(self, runs, clip: float, device, capture=True, warmup=3, before_capture=None, tiers=TIERS, max_graphs=2,
+                 attach=None):
         """runs: objects with .model and .opt (AdamW(capturable=True, fused=True) with a tensor lr on CUDA).
         before_capture(): called right before each capture (e.g. SongPool.wait_idle). max_graphs: every captured
         graph keeps its own activation pool (measured 20+ GB per tier at 32 cores), so only the first
@@ -31,6 +32,9 @@ class TieredStep:
         self.cuda = self.dev.type == 'cuda'
         self.capture = capture and self.cuda
         self.warmup, self.before_capture = warmup, before_capture
+        # attach(bt, out=None): fills the audio tensors of a metadata batch (batch._audio recipe) from the song
+        # pool, into `out` (a slot's static buffers) when given. Batches that already carry audio need no attach.
+        self.attach = attach
         self.tiers = [_Tier(i, t) for i, t in enumerate(tiers)]
         self.stats = {'eager_steps': 0, 'graph_steps': 0, 'captures': 0, 'tier_steps': [0] * len(tiers)}
         # Every backward that is not captured (warm-ups, eager fallback, the counterfactual loss) runs on this one
@@ -54,7 +58,11 @@ class TieredStep:
             B = bt['mode'].shape[0]
             buf = {}
             for k, v in bt.items():
+                if k == '_audio':
+                    continue
                 buf[k] = torch.empty(tier_shape(k, v.shape, tier.spec, B), dtype=v.dtype, device=self.dev) if torch.is_tensor(v) else v
+            if '_audio' in bt:  # metadata batch: the slot owns static audio buffers attach() fills every step
+                buf.update(audio_buffers(bt['_audio'], B, tier.spec, self.dev))
             buf['w_select'] = torch.zeros((), device=self.dev)
             tier.slots.append(buf)
 
@@ -64,7 +72,14 @@ class TieredStep:
         if len(batches) != len(tier.slots):
             raise ValueError('accumulation count cannot change after buffers are allocated')
         for bt, buf in zip(batches, tier.slots):
+            if '_audio' in bt:
+                self.attach(bt, out=buf)  # writes into buf's audio buffers; bt now carries them plus tap_scale/tap_top
+                for k in ('tap_scale', 'tap_top'):
+                    if k in bt:
+                        buf[k] = bt[k]
             for k, v in bt.items():
+                if k in AUDIO_KEYS and '_audio' not in bt and buf.get(k) is v:
+                    continue  # already attached into this very buffer
                 if not torch.is_tensor(v):
                     buf[k] = v
                     continue
@@ -83,6 +98,17 @@ class TieredStep:
                         Gd = bt['grp_valid'].shape[1]
                         dst.copy_((dst // Gd) * tier.spec['G'] + dst % Gd)
             buf['w_select'].fill_(w_select)
+
+    def _to_device(self, batches, w_select):
+        """Eager paths: attach audio (fresh tensors) and move the metadata to the device, unpadded."""
+        slots = []
+        for bt in batches:
+            if '_audio' in bt:
+                self.attach(bt)
+            b = {k: (v.to(self.dev, non_blocking=True) if torch.is_tensor(v) else v) for k, v in bt.items()}
+            b['w_select'] = torch.tensor(float(w_select), device=self.dev)
+            slots.append(b)
+        return slots
 
     # ------------------------------------------------------------ the step
     def _eager(self, slots):
@@ -129,24 +155,14 @@ class TieredStep:
         ti = tier_of(dims, [t.spec for t in self.tiers])
         if ti is None or not self.capture:  # beyond every tier (rare), or eager mode: same math, no padding
             self.stats['eager_steps'] += 1
-            slots = []
-            for bt in batches:
-                b = {k: (v.to(self.dev, non_blocking=True) if torch.is_tensor(v) else v) for k, v in bt.items()}
-                b['w_select'] = torch.tensor(float(w_select), device=self.dev)
-                slots.append(b)
-            return self._eager(slots)
+            return self._eager(self._to_device(batches, w_select))
         tier = self.tiers[ti]
         self.stats['tier_steps'][ti] += 1
         if ti >= self.max_graphs:  # tier too large to keep a captured pool for: eager with the batch's own (unpadded)
             # shapes: padding to the tier would double the transient activations (an 8-core tier-2 batch padded to
             # K512/H1024 needed ~15-20 GB on top of the pools and ran the H100 out of memory)
             self.stats['eager_steps'] += 1
-            slots = []
-            for bt in batches:
-                b = {k: (v.to(self.dev, non_blocking=True) if torch.is_tensor(v) else v) for k, v in bt.items()}
-                b['w_select'] = torch.tensor(float(w_select), device=self.dev)
-                slots.append(b)
-            return self._eager(slots)
+            return self._eager(self._to_device(batches, w_select))
         self._fill(tier, batches, w_select)
         if tier.graph is None:
             if tier.seen < self.warmup:  # eager warm-up on the side stream (allocator / cuBLAS / RNG state)

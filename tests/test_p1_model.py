@@ -20,6 +20,11 @@ def song(seed):
 
 
 def batch(n=4, seed=0):
+    exs, songs = batch_parts(n, seed)
+    return collate(exs, songs, CFG.taps, CFG.top_tap)
+
+
+def batch_parts(n=4, seed=0):
     exs, songs, k = [], [], 0
     charts = [synthetic_mania(seed), synthetic_phira(seed + 1)]
     while len(exs) < n:
@@ -35,7 +40,7 @@ def batch(n=4, seed=0):
         except (ValueError, AssertionError):
             pass
         k += 1
-    return collate(exs, songs, CFG.taps, CFG.top_tap)
+    return exs, songs
 
 
 class P1Tests(unittest.TestCase):

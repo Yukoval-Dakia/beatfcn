@@ -147,6 +147,43 @@ class TieredStepTests(unittest.TestCase):
                 self.assertEqual(int(ma[k][1]), int(mb[k][1]), k)
                 self.assertEqual(int(ma[k][2]), int(mb[k][2]), k)
 
+    def test_metadata_batch_attached_into_tier_slots(self):
+        """A worker-side metadata batch (collate_meta + _audio recipe) filled into a tier slot with the attach
+        callback gives the same losses as the plain attached batch."""
+        from beatfcn.model.batch import collate_meta, attach_audio, SongInfo, _CpuSong
+        from beatfcn.train.graph import TieredStep
+        from test_p1_model import batch_parts
+        exs, songs = batch_parts(3, 4)
+        infos = [SongInfo.of(s, b, CFG.taps[0]) for b, s in enumerate(songs)]
+        meta = collate_meta(exs, infos, CFG.taps, CFG.top_tap, CFG.tap_dim, CFG.summary_dim, False)
+        cpu = [_CpuSong(s, CFG.taps) for s in songs]
+        plain = batch(3, 4)
+        torch.manual_seed(0)
+        m = P1Model(dataclasses.replace(CFG, dropout=0.0, selection=True, compact_inner=True)).eval()
+        calls = []
+        ts = TieredStep([_Run(m, torch.optim.AdamW(m.parameters(), lr=1e-3))], 1.0, 'cpu', capture=False,
+                        attach=lambda bt, out=None: calls.append(out is not None) or attach_audio(bt, lambda b: cpu[b], 'cpu', None, out=out))
+        tier = ts.tiers[1]
+        ts._alloc(tier, [meta])
+        ts._fill(tier, [meta], 0.2)
+        self.assertEqual(calls, [True])
+        slot = tier.slots[0]
+        for k in ('audio', 'song_cells', 'ref_audio', 'hold_blocks', 'hold_detail'):
+            self.assertIn(k, slot)
+        with torch.no_grad():
+            la, ma = m(dict(plain, w_select=0.2))
+            lb, mb = m(dict(slot))
+        self.assertAlmostEqual(float(la), float(lb), places=4)
+        for k in ma:
+            if k != '_illegal':
+                self.assertEqual(int(ma[k][1]), int(mb[k][1]), k)
+                self.assertEqual(int(ma[k][2]), int(mb[k][2]), k)
+        eager = ts._to_device([collate_meta(exs, infos, CFG.taps, CFG.top_tap, CFG.tap_dim, CFG.summary_dim, False)], 0.2)
+        self.assertEqual(calls, [True, False])
+        with torch.no_grad():
+            lc, _ = m(eager[0])
+        self.assertAlmostEqual(float(la), float(lc), places=4)
+
     def test_eager_tiered_step_equals_plain_accumulation(self):
         from beatfcn.train.graph import TieredStep
         batches = [self._dyn(2, 11), self._dyn(3, 12)]
