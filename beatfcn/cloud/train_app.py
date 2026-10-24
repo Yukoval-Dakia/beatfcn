@@ -61,6 +61,7 @@ def _stream(rows, corpus_args, seed, micro_batch, taps, top_tap, meta=True, stat
                 attempted[key] = attempted.get(key, 0) + 1
             smp.audit = record_attempt
             while True:
+                t_b = time.time()
                 items = []
                 while len(items) < micro_batch:  # 4 cores per song bucket -> 2+ songs per microbatch
                     items += smp.draw(min(4, micro_batch - len(items)))
@@ -78,6 +79,7 @@ def _stream(rows, corpus_args, seed, micro_batch, taps, top_tap, meta=True, stat
                     first = False
                 bt['_provenance'] = [a.provenance for a, _ in items]
                 bt['_sampling_audit'] = {'worker': wid, 'attempts': dict(attempted)}
+                bt['_worker_s'] = round(time.time() - t_b, 4)  # production time of this batch inside the worker
                 yield bt, dict(smp.skipped)
     return Stream()
 
@@ -321,7 +323,7 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
     stream = torch.utils.data.DataLoader(_stream(train_rows, corpus_args, tc.seed + 7919 * resume_step, micro_batch, tuple(taps),
                                                  max(taps), static=None, pool=pool_per_worker),  # graphs pad per tier: no filtering
                                          batch_size=None, num_workers=workers, prefetch_factor=4, persistent_workers=True,
-                                         pin_memory=device == 'cuda')
+                                         pin_memory=False)  # metadata is ~2 MB per batch: pageable H2D is cheap; no pin thread
     from collections import deque
     from beatfcn.model.batch import attach_audio
     from beatfcn.train.pool import SongPool
@@ -340,25 +342,39 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
                                  for l in taps]).clone().to(torch.device(device))
     raw_it, queue = iter(stream), deque()
     util_hist = deque(maxlen=8)
+    dstat = {'dl_s': 0.0, 'attach_s': 0.0, 'write_s': 0.0, 'worker_s': 0.0, 'worker_max_s': 0.0, 'batches': 0, 'queue_empty': 0}
     worker_audits = {}
-    samples_file = open(f'{runs[0].dir}/samples.jsonl', 'a')
+    samples_file = open(f'{runs[0].dir}/samples.jsonl', 'a', buffering=1 << 20)  # volume writes: flush rarely
 
     def next_batch():
         """Prefetch `prefetch` metadata batches so their songs load in the background, then attach audio
         on the device for the oldest one. The look-ahead must cover a song load (2-8 s on the volume) at
         ~0.1 s per micro-batch: prefetch 2 stalled every song swap (0.70 s/step at 37% util)."""
+        if not queue:
+            dstat['queue_empty'] += 1
+        t0 = time.time()
         while len(queue) < prefetch:
             b, sk = next(raw_it)
             pool.request(b['_audio']['keys'])
             queue.append((b, sk))
+        t1 = time.time()
         b, sk = queue.popleft()
         audit = b.pop('_sampling_audit', {})
         if audit:
             worker_audits[audit['worker']] = audit['attempts']
+        ws = b.pop('_worker_s', 0.0)
         keys = list(b['_audio']['keys'])
         attach_audio(b, pool.get, device, scale_dev)
         pool.release(keys)
+        t2 = time.time()
         samples_file.write(json.dumps(b.pop('_provenance', [])) + '\n')
+        t3 = time.time()
+        dstat['dl_s'] += t1 - t0
+        dstat['attach_s'] += t2 - t1
+        dstat['write_s'] += t3 - t2
+        dstat['worker_s'] += ws
+        dstat['worker_max_s'] = max(dstat['worker_max_s'], ws)
+        dstat['batches'] += 1
         return b, sk
 
     class _It:
@@ -497,7 +513,11 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
                 r.opt.zero_grad(set_to_none=True)
         if (step + 1) % tc.log_every == 0:
             samples_file.flush()
-            shared = {'step': step + 1, 'lr': lr_at(step, tc), 'examples': examples, 'data_wait_s': round(wait_s, 1),
+            dsum = {k: (round(v, 2) if isinstance(v, float) else v) for k, v in dstat.items()}
+            dsum['worker_mean_s'] = round(dstat['worker_s'] / max(dstat['batches'], 1), 3)
+            for k in dstat:
+                dstat[k] = 0.0 if isinstance(dstat[k], float) else 0
+            shared = {'step': step + 1, 'lr': lr_at(step, tc), 'examples': examples, 'data_wait_s': round(wait_s, 1), 'data': dsum,
                       'gpu_s': round(gpu_s, 1), 'elapsed_s': round(time.time() - t0, 1),
                       'pool': {k: (round(v, 1) if isinstance(v, float) else v) for k, v in pool.stats.items()},
                       'graph': dict(gs.stats) if gs is not None else None,

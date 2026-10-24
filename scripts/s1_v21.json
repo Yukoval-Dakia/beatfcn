@@ -9,7 +9,7 @@
   "val_cores": 120,
   "val_songs": 24,
   "warmup": 500,
-  "validate_every": 1000,
+  "validate_every": 250,
   "lr": 0.0002,
   "variant": {
    "selection": false,
