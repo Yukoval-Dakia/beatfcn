@@ -342,6 +342,11 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
                                  for l in taps]).clone().to(torch.device(device))
     raw_it, queue = iter(stream), deque()
     util_hist = deque(maxlen=8)
+    # attach_audio launches ~300 small kernels per micro-batch; on the main stream they queue behind the previous
+    # step's graph replay and the launch queue fills, blocking the main thread until the replay drains (attach
+    # time ~= GPU time, ~50% utilisation). A dedicated stream gives them their own queue; the main stream waits
+    # for the attach event (GPU-side) before its copies read the attached tensors.
+    attach_stream = torch.cuda.Stream() if device == 'cuda' else None
     dstat = {'dl_s': 0.0, 'attach_s': 0.0, 'write_s': 0.0, 'worker_s': 0.0, 'worker_max_s': 0.0, 'batches': 0, 'queue_empty': 0}
     worker_audits = {}
     samples_file = open(f'{runs[0].dir}/samples.jsonl', 'a', buffering=1 << 20)  # volume writes: flush rarely
@@ -364,7 +369,17 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
             worker_audits[audit['worker']] = audit['attempts']
         ws = b.pop('_worker_s', 0.0)
         keys = list(b['_audio']['keys'])
-        attach_audio(b, pool.get, device, scale_dev)
+        if attach_stream is not None:
+            main = torch.cuda.current_stream()
+            attach_stream.wait_stream(main)
+            with torch.cuda.stream(attach_stream):
+                attach_audio(b, pool.get, device, scale_dev)
+            main.wait_stream(attach_stream)
+            for v in b.values():  # attached tensors were allocated on the attach stream; the main stream reads them
+                if torch.is_tensor(v) and v.is_cuda:
+                    v.record_stream(main)
+        else:
+            attach_audio(b, pool.get, device, scale_dev)
         pool.release(keys)
         t2 = time.time()
         samples_file.write(json.dumps(b.pop('_provenance', [])) + '\n')

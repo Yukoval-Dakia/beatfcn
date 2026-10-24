@@ -336,7 +336,8 @@ def prepare_inner_indices(bt):
 def _dslice(t, start, n, out):
     """out[:] = rows [start, start+n) of t, zero outside t (same semantics as _slice, any device)."""
     a, b = max(start, 0), min(start + n, t.shape[0])
-    out.zero_()
+    if b - a != n:  # window partly outside the song: clear the padding (one kernel fewer in the common case)
+        out.zero_()
     if b > a:
         out[a - start:b - start] = t[a:b].to(out.dtype)
     return out

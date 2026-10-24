@@ -14,7 +14,8 @@ import numpy as np
 import torch
 
 
-SLAB_ROWS = {3: 1000, 2: 64}  # size-class granularity by tensor rank: taps [cells, 8, D] per 1000 cells, summary [S, 8, D] per 64 rows
+SLAB_ROWS = {3: 4000, 2: 128}  # size classes by rank: taps [cells, 8, D] per 4000 cells (4 classes up to 16000: evicted slabs
+# are reused by most new songs; finer classes kept allocating new slabs and reserved memory grew ~1 GB per 25 steps)
 
 
 class _Song:
