@@ -300,8 +300,8 @@ class SongStream(nn.Module):
         for layer in self.blk_layers:
             x = layer(x)
         k, v = self.pool_k(x), self.pool_v(x)
-        att = torch.einsum('pd,nld->npl', self.pool_q.to(k.dtype), k).div(math.sqrt(bd)).softmax(-1)
-        pooled = torch.einsum('npl,nld->npd', att, v).reshape(B, NB, -1)
+        att = torch.einsum('pd,nld->npl', self.pool_q.float(), k.float()).div(math.sqrt(bd)).softmax(-1)
+        pooled = torch.einsum('npl,nld->npd', att.to(v.dtype), v).reshape(B, NB, -1)
         return self.audio_out(pooled)
 
     @staticmethod
@@ -665,8 +665,8 @@ class P1Model(nn.Module):
         P = qa.shape[-1]
         h0c = FE.HALO_US // FE.CELL_US
         core_cells = ptr_audio[:, h0c:h0c + CORE_CELLS]  # [B,200,8,P]
-        band = torch.einsum('byp,bcnp->bycn', qa, core_cells) / math.sqrt(P)
-        cell_score = torch.logsumexp(band.float(), -1)  # [B,Ny,200]
+        band = torch.einsum('byp,bcnp->bycn', qa.float(), core_cells.float()) / math.sqrt(P)  # fp32: no bf16 overflow
+        cell_score = torch.logsumexp(band, -1)  # [B,Ny,200]
         prev_ms = _ms_floor(t_prev)  # [B,Ny] ms from core start (BOS: -1); floor like the collated targets
         cell_ms = torch.arange(CORE_CELLS, device=dev) * MS_PER_CELL + MS_PER_CELL // 2
         delta = (cell_ms[None, None] - prev_ms[..., None]).clamp(min=0)
@@ -687,7 +687,7 @@ class P1Model(nn.Module):
         a_ms = _ms_floor(bt['copy_t'])
         a_cell = (h0c + (a_ms / MS_PER_CELL).long().clamp(0, CORE_CELLS - 1))
         a_audio = ptr_audio.mean(2).gather(1, a_cell[..., None].expand(-1, -1, P))
-        copy_logits = (torch.einsum('byp,bap->bya', qc, self.copy_key(a_audio)) / math.sqrt(P)).float()
+        copy_logits = torch.einsum('byp,bap->bya', qc.float(), self.copy_key(a_audio).float()) / math.sqrt(P)
         copy_mask = bt['copy_valid'][:, None] & (a_ms[:, None] > prev_ms[..., None])
         logits = torch.cat([self.end_head(h).float(), cell_logits, copy_logits], -1)
         mask = torch.cat([torch.ones(B, Ny, 1, dtype=torch.bool, device=dev), cell_mask, copy_mask], -1)
@@ -705,7 +705,8 @@ class P1Model(nn.Module):
         """In-cell offset logits [N, 40]: q [N,P] (off_q(h) for onsets, off_hold_q(o) for hold ends) attends over
         the chosen cell's tokens tok [N,3,8,P]; prev [N,4] / base_s [N] (cell start, s) add the rhythm kernel."""
         N, P = q.shape
-        tok = tok.reshape(N, 3 * 8, P) + self.off_pos.to(tok.dtype)
+        tok = (tok.reshape(N, 3 * 8, P) + self.off_pos.to(tok.dtype)).float()
+        q = q.float()
         w = torch.einsum('np,nkp->nk', q, tok).div(math.sqrt(P)).softmax(-1)
         pooled = torch.einsum('nk,nkp->np', w, tok)
         z = self.off_mlp(torch.cat([q, pooled], -1)).float()
@@ -908,7 +909,7 @@ class P1Model(nn.Module):
         feats = self.blk_band(self.sum_ln(blocks)).flatten(-2)  # [H,16,256]
         det = self.det_proj(self.tap_ln[self.c.taps.index(self.c.top_tap)](detail) + self.band)  # [H,50,8,P]
         q = self.det_q(torch.cat([o, feats.gather(1, tb[:, None, None].expand(-1, 1, feats.shape[-1]))[:, 0]], -1))
-        cell = torch.logsumexp((torch.einsum('hp,hcnp->hcn', q, det) / math.sqrt(q.shape[-1])).float(), -1)
+        cell = torch.logsumexp(torch.einsum('hp,hcnp->hcn', q.float(), det.float()) / math.sqrt(q.shape[-1]), -1)
         if prev is not None:
             tau = start_s[:, None] + (torch.arange(END_BLOCK_CELLS, device=cell.device).float() + 0.5) * (FE.CELL_US / FE.SEC)
             cell = cell + self._kernel(prev[:, None, :], tau[:, None, :])[:, 0]

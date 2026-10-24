@@ -184,6 +184,24 @@ class TieredStepTests(unittest.TestCase):
             lc, _ = m(eager[0])
         self.assertAlmostEqual(float(la), float(lc), places=4)
 
+    def test_non_finite_gradient_skips_the_update(self):
+        from beatfcn.train.graph import TieredStep
+        torch.manual_seed(5)
+        m = P1Model(dataclasses.replace(CFG, dropout=0.0))
+        before = {n: p.detach().clone() for n, p in m.named_parameters()}
+        ts = TieredStep([_Run(m, torch.optim.AdamW(m.parameters(), lr=1e-3, weight_decay=0.0))], 1.0, 'cpu', capture=False)
+        bad = self._dyn(2, 11)
+        bad['grp_t'][0, 0] = float('nan')  # a poisoned input: the loss and every gradient become NaN
+        mets, norms = ts.step([bad], 0.0)
+        self.assertFalse(torch.isfinite(norms[0]))
+        self.assertEqual(int(ts.nan_steps), 1)
+        for n, p in m.named_parameters():
+            self.assertTrue(torch.isfinite(p).all(), n)
+            self.assertTrue(torch.equal(p.detach(), before[n]), n)  # no update at all
+        ts.step([self._dyn(2, 11)], 0.0)  # a normal step still trains
+        self.assertEqual(int(ts.nan_steps), 1)
+        self.assertFalse(all(torch.equal(p.detach(), before[n]) for n, p in m.named_parameters()))
+
     def test_eager_tiered_step_equals_plain_accumulation(self):
         from beatfcn.train.graph import TieredStep
         batches = [self._dyn(2, 11), self._dyn(3, 12)]

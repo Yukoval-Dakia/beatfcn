@@ -317,6 +317,64 @@ def collate_meta(examples: list[F.CoreExample], infos: list[SongInfo], taps: tup
     return out
 
 
+def pack_batch(bt: dict) -> dict:
+    """Transport form of a collated metadata batch: every tensor, including those inside the _audio recipe, is
+    concatenated into one buffer per dtype. A batch then crosses the worker -> main process boundary as ~5
+    shared-memory segments instead of ~70 (each costs a file-descriptor hand-off and a socket round trip; the
+    main process could receive only ~12 batches/s however many workers ran) and is pinned as 5 buffers."""
+    parts, layout = {}, []
+
+    def put(path, t):
+        key = str(t.dtype)
+        lst = parts.setdefault(key, [])
+        off = sum(x.numel() for x in lst)
+        lst.append(t.reshape(-1))
+        layout.append((path, key, tuple(t.shape), off, t.numel()))
+
+    out = {}
+    for k, v in bt.items():
+        if torch.is_tensor(v):
+            put((k,), v)
+        elif k == '_audio':
+            r = dict(v)
+            for name in ('hold_b0', 'hold_d0'):
+                if torch.is_tensor(r.get(name)):
+                    put(('_audio', name), r[name])
+                    r[name] = None
+            reads = []
+            for i, (b, grp, lo, hi, rel) in enumerate(r['ref_reads']):
+                put(('_audio', 'ref_reads', i, 1), torch.as_tensor(grp))
+                put(('_audio', 'ref_reads', i, 4), torch.as_tensor(rel))
+                reads.append([b, None, lo, hi, None])
+            r['ref_reads'] = reads
+            out['_audio'] = r
+        else:
+            out[k] = v
+    out['_packed'] = {key: torch.cat(lst) if len(lst) > 1 else lst[0].clone() for key, lst in parts.items()}
+    out['_layout'] = layout
+    return out
+
+
+def unpack_batch(p: dict) -> dict:
+    """Inverse of pack_batch: tensors become views into the (pinned) buffers; no copy."""
+    bufs, layout = p['_packed'], p['_layout']
+    bt = {k: v for k, v in p.items() if k not in ('_packed', '_layout')}
+    if '_audio' in bt:
+        bt['_audio'] = dict(bt['_audio'])
+        bt['_audio']['ref_reads'] = [list(x) for x in bt['_audio']['ref_reads']]
+    for path, key, shape, off, n in layout:
+        t = bufs[key][off:off + n].view(shape)
+        if len(path) == 1:
+            bt[path[0]] = t
+        elif path[1] == 'ref_reads':
+            bt['_audio']['ref_reads'][path[2]][path[3]] = t
+        else:
+            bt['_audio'][path[1]] = t
+    if '_audio' in bt:
+        bt['_audio']['ref_reads'] = [tuple(x) for x in bt['_audio']['ref_reads']]
+    return bt
+
+
 def prepare_inner_indices(bt):
     """CPU-side indices for optional compaction of padded GRU rows; no labels are removed."""
     if bt['grp_valid'].device.type != 'cpu':

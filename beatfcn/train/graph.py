@@ -41,6 +41,10 @@ class TieredStep:
         # side stream: autograd's AccumulateGrad nodes remember the stream of the last backward, and a later
         # capture fails if that was the default stream (third baseline attempt failed exactly so).
         self.side = torch.cuda.Stream() if self.cuda else None
+        # steps whose gradient was not finite: the update is skipped (every grad zeroed) instead of poisoning the
+        # weights for the rest of the run (S1 v2.1 diverged to NaN in one step at 3250-3275 and trained garbage
+        # for 450 more steps); a device counter so the captured graph can maintain it
+        self.nan_steps = torch.zeros((), dtype=torch.long, device=self.dev)
 
     # ------------------------------------------------------------ static inputs
     def _compact(self):
@@ -141,7 +145,14 @@ class TieredStep:
                          for k, value in acc.items()})  # (mean loss, count, correct), no host sync
         norms = []
         for r in self.runs:
-            norms.append(torch.nn.utils.clip_grad_norm_(r.model.parameters(), self.clip).clone())  # own storage: read later
+            gn = torch.nn.utils.clip_grad_norm_(r.model.parameters(), self.clip).clone()  # own storage: read later
+            ok = torch.isfinite(gn)  # any non-finite gradient (the clip then scaled every grad by NaN): skip this update
+            grads = [p.grad for p in r.model.parameters() if p.grad is not None]
+            scale = ok.to(grads[0].dtype)
+            for g in grads:
+                g.nan_to_num_(nan=0.0, posinf=0.0, neginf=0.0).mul_(scale)
+            self.nan_steps += (~ok).to(self.nan_steps.dtype)
+            norms.append(gn)
             r.opt.step()
             r.opt.zero_grad(set_to_none=False)  # grads stay allocated: static tensors the graphs write
         return mets, norms

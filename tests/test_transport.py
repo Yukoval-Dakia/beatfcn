@@ -132,3 +132,33 @@ class ReadNpyTests(unittest.TestCase):
                 self.assertEqual(got.dtype, arr.dtype)
                 self.assertTrue(np.array_equal(got, arr))
 
+
+class PackTests(unittest.TestCase):
+    def test_pack_unpack_roundtrip_keeps_every_tensor_and_the_recipe(self):
+        from beatfcn.model.batch import collate_meta, pack_batch, unpack_batch, SongInfo, _CpuSong, attach_audio
+        from test_p1_model import batch_parts, CFG
+        exs, songs = batch_parts(3, 2)
+        infos = [SongInfo.of(s, b, CFG.taps[0]) for b, s in enumerate(songs)]
+        bt = collate_meta(exs, infos, CFG.taps, CFG.top_tap, CFG.tap_dim, CFG.summary_dim, False)
+        bt['_worker_s'] = 0.1
+        packed = pack_batch(bt)
+        self.assertLessEqual(len(packed['_packed']), 6)
+        self.assertFalse(any(torch.is_tensor(v) for k, v in packed.items() if k not in ('_packed',)))
+        back = unpack_batch(packed)
+        for k, v in bt.items():
+            if torch.is_tensor(v):
+                self.assertTrue(torch.equal(back[k], v), k)
+                self.assertEqual(back[k].dtype, v.dtype, k)
+        self.assertEqual(back['_worker_s'], 0.1)
+        ra, rb = bt['_audio'], back['_audio']
+        self.assertEqual(ra['keys'], rb['keys'])
+        self.assertTrue(torch.equal(ra['hold_b0'], rb['hold_b0']))
+        for x, y in zip(ra['ref_reads'], rb['ref_reads']):
+            self.assertEqual((x[0], x[2], x[3]), (y[0], y[2], y[3]))
+            self.assertTrue(torch.equal(torch.as_tensor(x[1]), y[1]) and torch.equal(torch.as_tensor(x[4]), y[4]))
+        cpu = [_CpuSong(s, CFG.taps) for s in songs]
+        a = attach_audio(dict(bt, _audio=dict(bt['_audio'])), lambda b: cpu[b], 'cpu', None)
+        b = attach_audio(back, lambda b: cpu[b], 'cpu', None)
+        for k in ('audio', 'song_cells', 'ref_audio', 'hold_blocks', 'hold_detail'):
+            self.assertTrue(torch.equal(a[k], b[k]), k)
+

@@ -40,7 +40,7 @@ def _stream(rows, corpus_args, seed, micro_batch, taps, top_tap, meta=True, stat
     import torch
     from beatfcn.train.data import Corpus
     from beatfcn.train.loop import CoreSampler
-    from beatfcn.model.batch import collate, collate_meta, STATIC_CORE
+    from beatfcn.model.batch import collate, collate_meta, STATIC_CORE, pack_batch
 
     class Stream(torch.utils.data.IterableDataset):
         def __iter__(self):
@@ -80,7 +80,7 @@ def _stream(rows, corpus_args, seed, micro_batch, taps, top_tap, meta=True, stat
                 bt['_provenance'] = [a.provenance for a, _ in items]
                 bt['_sampling_audit'] = {'worker': wid, 'attempts': dict(attempted)}
                 bt['_worker_s'] = round(time.time() - t_b, 4)  # production time of this batch inside the worker
-                yield bt, dict(smp.skipped)
+                yield (pack_batch(bt) if meta else bt), dict(smp.skipped)
     return Stream()
 
 
@@ -212,6 +212,22 @@ def _song_loader(corpus):
     return load
 
 
+def _resume_checkpoint(run_dir):
+    """Path of the checkpoint to resume from: last.pt, or best.pt when last.pt holds non-finite weights (a run that
+    diverged after its best validation); None when there is nothing to resume."""
+    import torch
+    last, best = f'{run_dir}/last.pt', f'{run_dir}/best.pt'
+    if not os.path.exists(last):
+        return None
+    ck = torch.load(last, map_location='cpu', weights_only=False)
+    finite = all(bool(torch.isfinite(t).all()) for t in ck['model'].values() if torch.is_tensor(t) and t.is_floating_point())
+    if finite:
+        return last
+    if os.path.exists(best):
+        return best
+    raise RuntimeError(f'{last} holds non-finite weights and there is no best.pt to fall back to')
+
+
 def _fixed_val(vsmp, val_cores, val_songs):
     """Validation cores: val_songs songs x (val_cores // val_songs) cores, their audio pinned in the device pool
     for the whole run; val_songs=0 keeps the historical one-core-per-random-chart draw."""
@@ -315,8 +331,9 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
     if prepped is not None and (len(prepped.get('val', [])) != val_cores or val_cores <= 0):
         raise RuntimeError(f'prep {prep} has an incomplete validation set')
     for r in runs:
-        if os.path.exists(f'{r.dir}/last.pt'):
-            previous = torch.load(f'{r.dir}/last.pt', map_location='cpu', weights_only=False)
+        ck_path = _resume_checkpoint(r.dir)
+        if ck_path:
+            previous = torch.load(ck_path, map_location='cpu', weights_only=False)
             if previous.get('rows_sha256') != info['rows_sha256']:
                 raise RuntimeError('checkpoint data identity differs: use a new run id for the corrected baseline')
             del previous
@@ -326,8 +343,9 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
     corpus = Corpus(**corpus_args)
     # the training stream starts first: its workers warm up while validation cores are built
     resume_step = 0
-    if os.path.exists(f'{runs[0].dir}/last.pt'):  # resumed runs must not replay the sample sequence from step 0
-        resume_step = int(torch.load(f'{runs[0].dir}/last.pt', map_location='cpu', weights_only=False)['step'])
+    ck0 = _resume_checkpoint(runs[0].dir)
+    if ck0:  # resumed runs must not replay the sample sequence from step 0
+        resume_step = int(torch.load(ck0, map_location='cpu', weights_only=False)['step'])
     stream = torch.utils.data.DataLoader(_stream(train_rows, corpus_args, tc.seed + 7919 * resume_step, micro_batch, tuple(taps),
                                                  max(taps), static=None, pool=pool_per_worker),  # graphs pad per tier: no filtering
                                          batch_size=None, num_workers=workers, prefetch_factor=4, persistent_workers=True,
@@ -335,7 +353,7 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
                                          in_order=False)  # no head-of-line blocking: a worker swapping songs (1-3 s) must not
                                          # hold back the batches the other workers already produced (sampling is random anyway)
     from collections import deque
-    from beatfcn.model.batch import attach_audio
+    from beatfcn.model.batch import attach_audio, unpack_batch
     from beatfcn.train.pool import SongPool
     # every worker keeps POOL resident songs per mode: the device pool must hold all of them plus the songs of
     # prefetched batches, or songs get evicted and reloaded in a loop (review item C; 28 workers simulated 74%
@@ -352,6 +370,7 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
                                  for l in taps]).clone().to(torch.device(device))
     raw_it, queue = iter(stream), deque()
     util_hist = deque(maxlen=8)
+    nan_seen = 0
     def attach(bt, out=None):
         """Audio for a metadata batch from the resident songs, into a tier slot's static buffers when given (no
         transient allocation per micro-batch: the churn fragmented the allocator up to the 80 GB limit, where
@@ -372,6 +391,7 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
         t0 = time.time()
         while len(queue) < prefetch:
             b, sk = next(raw_it)
+            b = unpack_batch(b)  # views into the pinned transport buffers
             pool.request(b['_audio']['keys'])
             queue.append((b, sk))
         t1 = time.time()
@@ -425,14 +445,17 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
                                   lr=lr0, betas=(0.9, 0.95), fused=cuda, capturable=graph and cuda)
         r.log({'event': 'start', 'model': asdict(r.mc), 'train': asdict(tc), 'params': sum(p.numel() for p in r.model.parameters()),
                'gpu': torch.cuda.get_device_name() if cuda else device})
-        if os.path.exists(f'{r.dir}/last.pt'):  # resume after preemption / restart (same run id)
-            ck = torch.load(f'{r.dir}/last.pt', map_location=dev, weights_only=False)
+        ck_path = _resume_checkpoint(r.dir)
+        if ck_path:  # resume after preemption / restart (same run id); best.pt when last.pt diverged (fresh optimiser state)
+            ck = torch.load(ck_path, map_location=dev, weights_only=False)
             if ck.get('rows_sha256') != info['rows_sha256']:
                 raise RuntimeError('checkpoint data identity differs: use a new run id for the corrected baseline')
             r.model.load_state_dict(ck['model'])
-            r.opt.load_state_dict(ck['opt'])
-            r.start, r.best = ck['step'], ck.get('best')
-            r.log({'event': 'resume', 'step': r.start, 'best': r.best})
+            if 'opt' in ck:
+                r.opt.load_state_dict(ck['opt'])
+            r.start = ck['step']
+            r.best = ck.get('best', (ck.get('val') or {}).get('total'))
+            r.log({'event': 'resume', 'step': r.start, 'best': r.best, 'from': os.path.basename(ck_path)})
     if len({r.start for r in runs}) != 1:
         raise RuntimeError(f'paired runs must resume from the same step: {[(r.id, r.start) for r in runs]}')
     start_step = runs[0].start
@@ -553,6 +576,15 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
                 r.log({'event': 'train', **shared, 'grad_norm': float(r.gn), 'fields': summarize(r.acc)})
                 r.acc = {}
             u = shared['gpu_util']
+            if gs is not None:  # skipped (non-finite) updates: a streak means the run must stop and be looked at
+                nan_now = int(gs.nan_steps)
+                shared['graph']['nan_steps'] = nan_now
+                if nan_now - nan_seen > 5:
+                    aborted = f'{nan_now - nan_seen} non-finite gradients in one log interval at step {step + 1}'
+                    log_all({'event': 'aborted', 'reason': aborted, 'step': step + 1})
+                    checkpoint(step + 1)
+                    break
+                nan_seen = nan_now
             if u is not None:  # the guard judges the mean of the last 8 log intervals: song-swap waves dip single intervals
                 util_hist.append(float(u))
                 u = sum(util_hist) / len(util_hist)
@@ -948,6 +980,54 @@ def bench_attach_entry():
         if k.endswith('_profile'):
             print(k)
             print('\n'.join(r[k]))
+
+
+def _bench_loader_body(workers: int, batches: int, taps_key: str, pca: str, manifest_name: str, in_order: bool):
+    """Throughput of the training stream alone (no GPU): batches per second delivered to the main thread, with
+    the per-batch worker production time, for a given worker count on this container."""
+    import torch
+    taps = (9, 16, 24)
+    train_rows, _, _ = _select_rows(taps_key, taps, pca, False, '', 0, '', manifest_name)
+    corpus_args = {'root': DATA, 'taps_key': taps_key, 'layers': taps, 'pca': pca, 'whiten': False}
+    stream = torch.utils.data.DataLoader(_stream(train_rows, corpus_args, 123, 8, taps, 24, static=None, pool=1),
+                                         batch_size=None, num_workers=workers, prefetch_factor=4, persistent_workers=True,
+                                         pin_memory=False, in_order=in_order)
+    it = iter(stream)
+    t0 = time.time()
+    first = None
+    ws = []
+    for i in range(batches):
+        b, _ = next(it)
+        b = unpack_batch(b)
+        if first is None:
+            first = time.time() - t0
+        ws.append(b.get('_worker_s', 0.0))
+    total = time.time() - t0
+    n = batches
+    return {'workers': workers, 'first_batch_s': round(first, 1), 'batches_per_s': round((n - 1) / max(total - first, 1e-6), 2),
+            'worker_mean_s': round(sum(ws) / n, 3), 'worker_max_s': round(max(ws), 2), 'cpu_count': os.cpu_count()}
+
+
+@app.function(image=image, volumes={DATA: data}, cpu=12.0, memory=32768, timeout=1200)
+def bench_loader_12(workers: int = 12, batches: int = 300, taps_key: str = 'v4_i8_L9-16-24', pca: str = 'i8_9-16-24',
+                    manifest_name: str = 'charts.offset-v2-3d99ff6bd5e7.jsonl', in_order: bool = False):
+    return _bench_loader_body(workers, batches, taps_key, pca, manifest_name, in_order)
+
+
+@app.function(image=image, volumes={DATA: data}, cpu=32.0, memory=65536, timeout=1200)
+def bench_loader_32(workers: int = 28, batches: int = 300, taps_key: str = 'v4_i8_L9-16-24', pca: str = 'i8_9-16-24',
+                    manifest_name: str = 'charts.offset-v2-3d99ff6bd5e7.jsonl', in_order: bool = False):
+    return _bench_loader_body(workers, batches, taps_key, pca, manifest_name, in_order)
+
+
+@app.local_entrypoint()
+def bench_loader_entry():
+    a = bench_loader_12.spawn(workers=12)
+    b = bench_loader_32.spawn(workers=12)
+    c = bench_loader_32.spawn(workers=28)
+    out = {'w12_cpu12': a.get(), 'w12_cpu32': b.get(), 'w28_cpu32': c.get()}
+    Path('reports/loader_bench_2026-10-24.json').write_text(json.dumps(out, indent=1))
+    print(json.dumps(out, indent=1))
 
 
 @app.local_entrypoint()
