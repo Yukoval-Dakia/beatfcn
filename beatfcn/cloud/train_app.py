@@ -331,7 +331,7 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
     # prefetched batches, or songs get evicted and reloaded in a loop (review item C; 28 workers simulated 74%
     # reloads at 160). ~108 MB per song: 200 songs = 22 GB.
     n_modes = len({r['mode'] for r in train_rows})
-    need = workers * n_modes * pool_per_worker + prefetch * 2 + 8  # prefetched micro-batches mostly reuse resident songs
+    need = workers * n_modes * pool_per_worker + prefetch + 8  # prefetched micro-batches mostly reuse resident songs (~1 new song each at most)
     if pool_songs < need:
         log_all({'event': 'pool_capacity', 'requested': pool_songs, 'raised_to': need, 'workers': workers, 'modes': n_modes, 'per_worker': pool_per_worker})
         pool_songs = need

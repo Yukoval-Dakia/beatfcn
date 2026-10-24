@@ -135,10 +135,16 @@ class TieredStep:
             return self._eager(slots)
         tier = self.tiers[ti]
         self.stats['tier_steps'][ti] += 1
-        if ti >= self.max_graphs:  # tier too large to keep a captured pool for: eager, still padded (same code path)
-            self._fill(tier, batches, w_select)
+        if ti >= self.max_graphs:  # tier too large to keep a captured pool for: eager with the batch's own (unpadded)
+            # shapes: padding to the tier would double the transient activations (an 8-core tier-2 batch padded to
+            # K512/H1024 needed ~15-20 GB on top of the pools and ran the H100 out of memory)
             self.stats['eager_steps'] += 1
-            return self._eager(tier.slots)
+            slots = []
+            for bt in batches:
+                b = {k: (v.to(self.dev, non_blocking=True) if torch.is_tensor(v) else v) for k, v in bt.items()}
+                b['w_select'] = torch.tensor(float(w_select), device=self.dev)
+                slots.append(b)
+            return self._eager(slots)
         self._fill(tier, batches, w_select)
         if tier.graph is None:
             if tier.seen < self.warmup:  # eager warm-up on the side stream (allocator / cuBLAS / RNG state)
