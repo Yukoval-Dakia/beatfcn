@@ -74,9 +74,10 @@ AXIS = {**{k: ('G', 1) for k in ('grp_valid', 'grp_t', 'grp_cell', 'grp_off', 'g
         'song_cells': ('CS', 2),  # stored cells = C // STREAM_STRIDE
         **{k: ('NB', 1) for k in ('blk_valid', 'blk_t', 'blk_cov', 'blk_grid', 'blk_counts')},
         **{k: ('H', 0) for k in ('hold_index', 'hold_valid', 'hold_block', 'hold_cell', 'hold_off', 'hold_ok_lo',
-                                 'hold_ok_hi', 'hold_onset_us', 'hold_blocks', 'hold_detail', 'hold_inner_index')},
+                                 'hold_ok_hi', 'hold_onset_us', 'hold_prev', 'hold_blocks', 'hold_detail', 'hold_inner_index')},
         'inner_index': ('N', 0)}  # compact_inner: valid-group rows; N = B x G x 3/4 per tier, padded with an invalid slot
-PAD_VALUE = {'grp_copy': -1, 'note_lane': -1, 'note_line': -1, 'note_side': -1, 'controls': -1, 'prev_onsets': NO_ONSET}
+PAD_VALUE = {'grp_copy': -1, 'note_lane': -1, 'note_line': -1, 'note_side': -1, 'controls': -1, 'prev_onsets': NO_ONSET,
+             'hold_prev': NO_ONSET}
 
 
 def batch_dims(bt) -> dict:
@@ -198,6 +199,7 @@ def collate_meta(examples: list[F.CoreExample], infos: list[SongInfo], taps: tup
               'ref_reads': [], 'holds': [], 'taps': tuple(taps), 'top': top_tap, 'Dt': Dt, 'D_sum': D_sum, 'quant': quant,
               'R': R, 'C': C}
     hold_index, hold = [], {'block': [], 'cell': [], 'off': [], 'ok_lo': [], 'ok_hi': [], 'onset_us': []}
+    hold_prev = []  # per hold: its onset then the most recent earlier onsets (absolute seconds; rhythm kernel)
     blk_arange = np.arange(NB, dtype=np.float64)
     for b, (ex, info) in enumerate(zip(examples, infos)):
         a, bb = max(ex.song_cell0, 0), min(ex.song_cell0 + F.LOCAL_CELLS, info.n_cells)
@@ -245,6 +247,7 @@ def collate_meta(examples: list[F.CoreExample], infos: list[SongInfo], taps: tup
         # rhythm context per Y row: the most recent onsets among known onsets BEFORE the core and the earlier
         # targets (never a later target; v2.1 §3.3 item 3), most recent first
         hist = sorted({float(t) for t in ex.known[:, 0] if t < 0})  # distinct onsets (chords share a time)
+        all_onsets = sorted(set(hist) | {tg['t_rel_us'] / F.SEC for tg in ex.groups})  # for hold ends: every onset <= the hold's
         for i in range(len(ex.groups) + 1):
             recent = hist[-PREV_ONSETS:][::-1]
             if recent:
@@ -283,6 +286,9 @@ def collate_meta(examples: list[F.CoreExample], infos: list[SongInfo], taps: tup
                 hold['ok_lo'].append(onset_abs + lo)
                 hold['ok_hi'].append(onset_abs + hi)
                 hold['onset_us'].append(onset_abs)
+                t_on = tg['t_rel_us'] / F.SEC
+                prev = [t for t in all_onsets if t <= t_on][-PREV_ONSETS:][::-1]  # the hold's own onset first
+                hold_prev.append([p + ex.c0_us / F.SEC for p in prev] + [NO_ONSET] * (PREV_ONSETS - len(prev)))
                 recipe['holds'].append((b, int(b0h), int((b0h + blk) * END_BLOCK_CELLS)))
     H, Hp = len(hold_index), _size(len(hold_index), 'H', static)
     pad = Hp - H  # padded holds: index (0,0,0), zero targets/blocks/detail, hold_valid False (masked everywhere)
@@ -290,6 +296,7 @@ def collate_meta(examples: list[F.CoreExample], infos: list[SongInfo], taps: tup
     out['hold_valid'] = torch.arange(Hp) < H
     for key in ('block', 'cell', 'off', 'ok_lo', 'ok_hi', 'onset_us'):
         out['hold_' + key] = torch.tensor(hold[key] + [0] * pad, dtype=torch.long)
+    out['hold_prev'] = torch.tensor(hold_prev + [[NO_ONSET] * PREV_ONSETS] * pad, dtype=torch.float32).reshape(-1, PREV_ONSETS)
     recipe['Hp'] = Hp
     out['_audio'] = recipe
     prepare_inner_indices(out)

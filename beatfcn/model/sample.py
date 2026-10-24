@@ -92,8 +92,9 @@ def generate_core(model: P1Model, ex: FE.CoreExample, song, observed_holds, runs
             if onset == t_abs and lane >= 0:
                 busy[lane] = True
         right_new = np.array(_right(t_abs - 1, observed_heads, runs), np.float32)
+        onsets_abs = sorted({c0 + g['t_rel_us'] for g in work.groups} | {u for u, _, _ in observed_heads} | {a for a, _, _ in holds})
         notes = _inner(model, bt, hrow[:, 0], pa, t_rel, right_new, busy, song, ex, t_abs, holds, runs, rng,
-                       temperature, top_p, greedy, device, observed_heads)
+                       temperature, top_p, greedy, device, observed_heads, onsets_abs)
         if not notes:
             # No legal note at this time. Advance the cursor, without emitting an empty group.
             t_prev = t_rel
@@ -118,7 +119,7 @@ def _right(t, observed_heads, runs):
     return (min(dt, 60.0), nxt[1] if nxt else -1, nxt[2] if nxt else -1, min((run_end - t) / FE.SEC, 60.0))
 
 
-def _inner(model, bt, h, pa, t_rel, right_new, busy, song, ex, t_abs, holds, runs, rng, temperature, top_p, greedy, device, observed_heads=()):
+def _inner(model, bt, h, pa, t_rel, right_new, busy, song, ex, t_abs, holds, runs, rng, temperature, top_p, greedy, device, observed_heads=(), onsets_abs=()):
     c = model.c
     mode = int(bt['mode'][0])
     hs = model.gru_init(h, pa, torch.tensor([t_rel / FE.SEC], device=device), torch.from_numpy(right_new)[None].to(device),
@@ -156,7 +157,8 @@ def _inner(model, bt, h, pa, t_rel, right_new, busy, song, ex, t_abs, holds, run
                                          torch.tensor([[n['x']]], device=device)], -1))
         dur = 0.0
         if typ == 1:
-            end = _hold_end(model, o2, song, t_abs, n, holds, runs, rng, temperature, top_p, greedy, device, observed_heads)
+            prev = [t_abs] + [u for u in onsets_abs if u < t_abs][-3:][::-1]  # the hold's onset, then earlier onsets
+            end = _hold_end(model, o2, song, t_abs, n, holds, runs, rng, temperature, top_p, greedy, device, observed_heads, prev)
             if end is None:  # no legal end: fall back to tap if allowed, else stop the group
                 if not bool(allowed[0]):
                     break
@@ -181,7 +183,7 @@ def _sample_x(params, rng, greedy):
     return float((mu[k] + log_s[k].exp() * (u.log() - (1 - u).log())).clamp(-1, 1))
 
 
-def _hold_end(model, o, song, onset, n, holds, runs, rng, temperature, top_p, greedy, device, observed_heads=()):
+def _hold_end(model, o, song, onset, n, holds, runs, rng, temperature, top_p, greedy, device, observed_heads=(), prev_abs_us=None):
     run_end = next((b for a, b in runs if a <= onset < b), onset)
     hi = run_end
     if n['lane'] >= 0:
@@ -210,15 +212,21 @@ def _hold_end(model, o, song, onset, n, holds, runs, rng, temperature, top_p, gr
     a, e = cells, min(cells + det.shape[0], top.shape[0])
     if e > a:
         det[:e - a] = np.asarray(top[a:e], np.float32)
-    cell, _, dtok = model.hold_cells(o, blocks.to(device)[None], torch.from_numpy(det).to(device)[None], torch.tensor([blk], device=device))
     start = (b0 + blk) * FE.BLOCK_US
+    prev = None
+    if prev_abs_us is not None:
+        from .batch import PREV_ONSETS, NO_ONSET
+        vals = [u / FE.SEC for u in prev_abs_us][:PREV_ONSETS]
+        prev = torch.tensor([vals + [NO_ONSET] * (PREV_ONSETS - len(vals))], device=device)
+    cell, _, dtok = model.hold_cells(o, blocks.to(device)[None], torch.from_numpy(det).to(device)[None], torch.tensor([blk], device=device),
+                                     prev, torch.tensor([start / FE.SEC], device=device))
     cb = start + torch.arange(FE.BLOCK_US // FE.CELL_US) * FE.CELL_US
     cmask = (cb <= hi) & (cb + FE.CELL_US - FE.MS >= lo)
     if not cmask.any():
         return None
     co = _pick(cell[0].cpu(), cmask, rng, temperature, top_p, greedy)
     tok = model._cell_tokens(dtok, torch.tensor([[co]], device=device))[:, 0]  # [1,3,8,P]
-    ol = model.offset_logits(model.off_hold_q(o), tok)
+    ol = model.offset_logits(model.off_hold_q(o), tok, prev, torch.tensor([(start + co * FE.CELL_US) / FE.SEC], device=device))
     fb = start + co * FE.CELL_US + torch.arange(MS_PER_CELL) * FE.MS
     fmask = (fb <= hi) & (fb >= lo)
     off = _pick(ol[0].cpu(), fmask, rng, temperature, top_p, greedy)

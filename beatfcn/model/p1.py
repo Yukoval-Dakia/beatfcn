@@ -900,13 +900,18 @@ class P1Model(nn.Module):
             o = torch.stack(o2_steps, 1)[inner_rows, hi[:, 2]]
             self._hold(bt, torch.arange(hi.shape[0], device=dev), o, m, bt.get('hold_valid'))
 
-    def hold_cells(self, o, blocks, detail, tb):
+    def hold_cells(self, o, blocks, detail, tb, prev=None, start_s=None):
         """Hold end, cell step: o [H,gru] note state, blocks [H,16,8,D] summary rows, detail [H,50,8,Dt] top-tap
-        cells of the chosen block tb [H] -> (cell logits [H,50], block features [H,16,256], cell tokens [H,50,8,P])."""
+        cells of the chosen block tb [H] -> (cell logits [H,50], block features [H,16,256], cell tokens [H,50,8,P]).
+        prev [H,4] (absolute s: the hold's onset, then earlier onsets) and start_s [H] (block start, absolute s)
+        add the rhythm interval kernel: hold lengths sit on the beat grid like onsets do."""
         feats = self.blk_band(self.sum_ln(blocks)).flatten(-2)  # [H,16,256]
         det = self.det_proj(self.tap_ln[self.c.taps.index(self.c.top_tap)](detail) + self.band)  # [H,50,8,P]
         q = self.det_q(torch.cat([o, feats.gather(1, tb[:, None, None].expand(-1, 1, feats.shape[-1]))[:, 0]], -1))
         cell = torch.logsumexp((torch.einsum('hp,hcnp->hcn', q, det) / math.sqrt(q.shape[-1])).float(), -1)
+        if prev is not None:
+            tau = start_s[:, None] + (torch.arange(END_BLOCK_CELLS, device=cell.device).float() + 0.5) * (FE.CELL_US / FE.SEC)
+            cell = cell + self._kernel(prev[:, None, :], tau[:, None, :])[:, 0]
         return cell, feats, det
 
     def _hold(self, bt, k, o, m, valid=None):
@@ -918,18 +923,19 @@ class P1Model(nn.Module):
         bstart = (b0[:, None] + blocks[None]) * FE.BLOCK_US
         blk_mask = (bstart < hi[:, None] + 1) & (bstart + FE.BLOCK_US > lo[:, None])
         tb = bt['hold_block'][k]
-        cell, feats, det = self.hold_cells(o, bt['hold_blocks'][k], bt['hold_detail'][k], tb)
+        start = (b0 + tb) * FE.BLOCK_US
+        prev = bt['hold_prev'][k] if 'hold_prev' in bt else None
+        cell, feats, det = self.hold_cells(o, bt['hold_blocks'][k], bt['hold_detail'][k], tb, prev, start.float() / FE.SEC)
         blk_logits = torch.einsum('hd,hkd->hk', self.blk_q(o), feats) / 16 + self.blk_off.weight.T
         ones = torch.ones(len(k), dtype=torch.bool, device=dev) if valid is None else valid[k]
         m['end_block'] = masked_ce(blk_logits, tb, ones, blk_mask, 'end_block')
         # block detail is revealed only for the (teacher-forced) chosen block: 40 ms cell, then the offset
-        start = (b0 + tb) * FE.BLOCK_US
         cb = start[:, None] + torch.arange(END_BLOCK_CELLS, device=dev)[None] * FE.CELL_US
         cell_mask = (cb <= hi[:, None]) & (cb + FE.CELL_US - FE.MS >= lo[:, None])  # some ms point in [lo, hi]
         tc = bt['hold_cell'][k]
         m['end_cell'] = masked_ce(cell, tc, ones, cell_mask, 'end_cell')
         tok = self._cell_tokens(det, tc[:, None])[:, 0]  # [H,3,8,P]
-        off = self.offset_logits(self.off_hold_q(o), tok)
+        off = self.offset_logits(self.off_hold_q(o), tok, prev, (start + tc * FE.CELL_US).float() / FE.SEC)
         fb = (start + tc * FE.CELL_US)[:, None] + torch.arange(MS_PER_CELL, device=dev)[None] * FE.MS
         off_mask = (fb <= hi[:, None]) & (fb >= lo[:, None])  # exact ms end times; lo = onset + 1 us
         m['end_off'] = masked_ce(off, bt['hold_off'][k], ones, off_mask, 'end_off')
