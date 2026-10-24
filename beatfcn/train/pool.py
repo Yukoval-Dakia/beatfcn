@@ -98,8 +98,9 @@ class SongPool:
                 cur.wait_event(song.event)
                 song.event = None
                 song._host = None
-            for t in list(song.taps.values()) + [song.summary, song.mel10]:  # the allocator must not reuse this
-                t.record_stream(cur)  # memory (after eviction) before the consumer stream's reads are done
+            for t in list(song.taps.values()) + [song.summary] + ([song.mel10] if song.mel10 is not None else []):
+                t.record_stream(cur)  # the allocator must not reuse this memory (after eviction) before the
+                # consumer stream's reads are done
         with self.lock:
             self.resident.move_to_end(sha)
         self._evict()
