@@ -76,10 +76,12 @@ class TieredStep:
                 else:  # padded axis: reset to collate's padding value, copy the real rows
                     pad = bt['mode'].shape[0] * tier.spec['G'] - 1 if k == 'inner_index' else PAD_VALUE.get(k, 0)
                     s.fill_(pad)  # inner_index: the last group slot, invalid by tier choice
-                    if k == 'inner_index':  # flat (b * G + g) indices: re-encode for the tier's G (review finding 1)
+                    dst = s[tuple(slice(0, n) for n in v.shape)]
+                    dst.copy_(v, non_blocking=True)  # v is pinned (DataLoader): asynchronous
+                    if k == 'inner_index':  # flat (b * G + g) indices: re-encode for the tier's G (review finding 1),
+                        # on the device (a host-side re-encode would be a pageable copy = a stream sync per batch)
                         Gd = bt['grp_valid'].shape[1]
-                        v = (v // Gd) * tier.spec['G'] + v % Gd
-                    s[tuple(slice(0, n) for n in v.shape)].copy_(v, non_blocking=True)
+                        dst.copy_((dst // Gd) * tier.spec['G'] + dst % Gd)
             buf['w_select'].fill_(w_select)
 
     # ------------------------------------------------------------ the step
