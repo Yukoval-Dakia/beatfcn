@@ -331,6 +331,16 @@ def _dslice_strided(t, start, n, stride, out):
     return out
 
 
+def _gather_rows(t, starts, n, out, out_idx, dev):
+    """out[out_idx[i]] = t[starts[i] : starts[i] + n] (zero beyond t's rows), as one gather per call."""
+    idx = starts.to(dev)[:, None] + torch.arange(n, device=dev)[None]  # [k, n]
+    ok = (idx >= 0) & (idx < t.shape[0])
+    rows = t[idx.clamp(0, max(t.shape[0] - 1, 0))].to(out.dtype)  # [k, n, ...]
+    rows = rows.masked_fill(~ok[(...,) + (None,) * (rows.dim() - 2)], 0)
+    out[out_idx] = rows
+    return out
+
+
 def attach_audio(bt: dict, get_song, device='cpu', scales=None, mel=False) -> dict:
     """Fill the audio tensors of a collate_meta batch from song caches: get_song(key) -> object with .taps
     (layer -> tensor [cells,8,Dt], int8 raw when quantised), .summary [S,8,D] and .mel10 [frames,128] on
@@ -366,9 +376,17 @@ def attach_audio(bt: dict, get_song, device='cpu', scales=None, mel=False) -> di
             span = torch.zeros(hi - lo, 8, Dt, dtype=tdt, device=dev)
             _dslice(songs[b].taps[l], lo, hi - lo, span)
             ref_audio[b, gi, j] = span[ri]
-    for h, (b, b0, det0) in enumerate(r['holds']):
-        _dslice(songs[b].summary, b0, F.MAX_END_BLOCKS, blocks[h])
-        _dslice(songs[b].taps[top], det0, END_BLOCK_CELLS, detail[h])
+    if r['holds']:  # one gather per core for the block rows and one for the detail cells (a Python loop with two
+        # device copies per hold cost ~0.1 s per micro-batch on the main thread and starved the GPU)
+        hb = torch.tensor([h[0] for h in r['holds']])
+        b0s = torch.tensor([h[1] for h in r['holds']])
+        d0s = torch.tensor([h[2] for h in r['holds']])
+        for b in range(B):
+            sel = torch.nonzero(hb == b)[:, 0]
+            if not len(sel):
+                continue
+            _gather_rows(songs[b].summary, b0s[sel], F.MAX_END_BLOCKS, blocks, sel.to(dev), dev)
+            _gather_rows(songs[b].taps[top], d0s[sel], END_BLOCK_CELLS, detail, sel.to(dev), dev)
     bt['audio'], bt['song_cells'], bt['ref_audio'] = audio, song_cells, ref_audio
     bt['hold_blocks'], bt['hold_detail'] = blocks, detail
     if quant:  # per-tap dequantisation scale [T, Dt]; applied on the device by dequant()

@@ -29,8 +29,8 @@
   "loaders": 4,
   "graph": true,
   "max_graphs": 2,
-  "min_util": 50.0,
-  "check_after_s": 600.0,
+  "min_util": 70.0,
+  "check_after_s": 480.0,
   "manifest_name": "charts.offset-v2-3d99ff6bd5e7.jsonl",
   "prep": true,
   "resources": {
