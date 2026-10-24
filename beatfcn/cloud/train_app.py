@@ -204,6 +204,14 @@ def _select_rows(taps_key, taps, pca, whiten, songs_file, max_train_songs, val_s
     return train_rows, val_rows, info
 
 
+def _song_loader(corpus):
+    """Corpus.load_numpy with a .paths companion so SongPool can read files into its pinned staging buffers."""
+    def load(sha, mel=True):
+        return corpus.load_numpy(sha, mel=mel)
+    load.paths = corpus.song_paths
+    return load
+
+
 def _fixed_val(vsmp, val_cores, val_songs):
     """Validation cores: val_songs songs x (val_cores // val_songs) cores, their audio pinned in the device pool
     for the whole run; val_songs=0 keeps the historical one-core-per-random-chart draw."""
@@ -335,7 +343,7 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
     if pool_songs < need:
         log_all({'event': 'pool_capacity', 'requested': pool_songs, 'raised_to': need, 'workers': workers, 'modes': n_modes, 'per_worker': pool_per_worker})
         pool_songs = need
-    pool = SongPool(corpus.load_numpy, tuple(taps), device, capacity=pool_songs, loaders=loaders, mel=False)  # v2.1 reads no mel
+    pool = SongPool(_song_loader(corpus), tuple(taps), device, capacity=pool_songs, loaders=loaders, mel=False)  # v2.1 reads no mel
     scale_dev = None  # per-tap int8 scales once on the device: no per-batch host->device copy in attach_audio
     if corpus.quant:
         scale_dev = torch.stack([torch.broadcast_to(torch.as_tensor(np.asarray(corpus.scale[l], np.float32)), (corpus.tap_dim,))
@@ -880,7 +888,7 @@ def bench_attach(prep_key: str = '91a2f7c9ff752366', taps_key: str = 'v4_i8_L9-1
     val = torch.load(f'{DATA}/prep/{prep_key}.pt', map_location='cpu', weights_only=False)['val']
     corpus = Corpus(root=DATA, taps_key=taps_key, layers=taps, pca=pca)
     shas = sorted({s for _, s in val})
-    pool = SongPool(corpus.load_numpy, taps, 'cuda', capacity=len(shas) + 8, loaders=4, mel=False)
+    pool = SongPool(_song_loader(corpus), taps, 'cuda', capacity=len(shas) + 8, loaders=4, mel=False)
     t0 = time.time()
     pool.request(shas)
     pool.wait_idle()
@@ -1301,7 +1309,7 @@ def bench_graph(batches: str = 'bench/meta_static_v4.pt', tap_dim: int = 1024, s
     dev = torch.device('cuda')
     out = {'gpu': torch.cuda.get_device_name(), 'torch': torch.__version__, 'n_batches': len(metas)}
     # --- data path: pool loads + attach
-    pool = SongPool(corpus.load_numpy, taps, 'cuda', capacity=pool_songs)
+    pool = SongPool(_song_loader(corpus), taps, 'cuda', capacity=pool_songs)
     songs = sorted({k for b in metas for k in b['_audio']['keys']})
     t = time.time()
     pool.request(songs)
@@ -1476,7 +1484,7 @@ def bench_corrected(batches: str = 'bench/meta_offset_v2_dynamic.pt', steps: int
     if not metas:
         raise ValueError('benchmark has no input batches')
     songs = sorted({s for b in metas for s in b['_audio']['keys']})
-    pool = SongPool(corpus.load_numpy, tuple(z['taps']), 'cuda', capacity=len(songs))
+    pool = SongPool(_song_loader(corpus), tuple(z['taps']), 'cuda', capacity=len(songs))
     started = time.perf_counter()
     pool.request(songs)
     full = []

@@ -10,8 +10,11 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+import queue
 import numpy as np
 import torch
+
+STAGE_BYTES = 256 << 20  # pinned staging buffer per loader thread (one tap of a 20-min song is ~250 MB)
 
 
 class _Song:
@@ -31,6 +34,14 @@ class SongPool:
         self.stream = torch.cuda.Stream() if self.cuda else None
         self.pool = ThreadPoolExecutor(loaders)
         self.lock = threading.Lock()
+        # Host -> device path: each loader thread reads a file straight into a pinned staging buffer allocated once,
+        # then copies it to the device asynchronously. Measured on an L40S: with pageable copies in flight, the
+        # main thread's attach_audio took 96 ms per micro-batch instead of 2.3 ms (every CUDA call stalls behind a
+        # pageable memcpy); per-song pinned allocations (cudaHostAlloc) serialised the same way.
+        self.staging = queue.Queue()
+        if self.cuda:
+            for _ in range(loaders):
+                self.staging.put(torch.empty(STAGE_BYTES, dtype=torch.uint8).pin_memory())
         self.resident: OrderedDict[str, _Song] = OrderedDict()  # LRU order: oldest first
         self.pending: dict[str, object] = {}  # sha -> future
         self.pinned: dict[str, int] = {}  # sha -> number of queued batches referencing it: never evicted
@@ -39,29 +50,66 @@ class SongPool:
     # ------------------------------------------------------------ loading
     def _load(self, sha):
         t0 = time.time()
-        try:
-            taps_np, summary_np, mel_np = self.load_numpy(sha, mel=self.mel)
-        except TypeError:  # loaders without the mel flag (tests)
-            taps_np, summary_np, mel_np = self.load_numpy(sha)
-        arrays = [np.asarray(taps_np[l]) for l in self.taps] + [np.asarray(summary_np)] + ([np.asarray(mel_np)] if self.mel else [])
-        # pageable host -> device copies on the side stream: no pinned allocation per song (cudaHostAlloc /
-        # cudaFreeHost of ~115 MB per load are slow, serialising driver calls)
-        host = [torch.from_numpy(a) for a in arrays]
-        if self.cuda:
-            with torch.cuda.stream(self.stream):
-                dev = [h.to(self.dev) for h in host]
-                ev = torch.cuda.Event()
-                ev.record(self.stream)
+        if self.cuda and getattr(self.load_numpy, 'paths', None):
+            dev, nbytes, ev = self._load_staged(sha)
         else:
-            dev, ev = host, None
+            try:
+                taps_np, summary_np, mel_np = self.load_numpy(sha, mel=self.mel)
+            except TypeError:  # loaders without the mel flag (tests)
+                taps_np, summary_np, mel_np = self.load_numpy(sha)
+            arrays = [np.asarray(taps_np[l]) for l in self.taps] + [np.asarray(summary_np)] + ([np.asarray(mel_np)] if self.mel else [])
+            host = [torch.from_numpy(a) for a in arrays]
+            nbytes = sum(a.nbytes for a in arrays)
+            if self.cuda:  # pinned staging unavailable (loader without .paths): pageable copies on the side stream
+                with torch.cuda.stream(self.stream):
+                    dev = [h.to(self.dev) for h in host]
+                    ev = torch.cuda.Event()
+                    ev.record(self.stream)
+            else:
+                dev, ev = host, None
         T = len(self.taps)
-        song = _Song({l: t for l, t in zip(self.taps, dev[:T])}, dev[T], dev[T + 1] if self.mel else None, ev,
-                     sum(a.nbytes for a in arrays))
-        song._host = None  # pageable copies complete before copy_() returns; nothing to keep alive
+        song = _Song({l: t for l, t in zip(self.taps, dev[:T])}, dev[T], dev[T + 1] if self.mel else None, ev, nbytes)
+        song._host = None
         self.stats['loads'] += 1
         self.stats['bytes'] += song.nbytes
         self.stats['load_s'] += time.time() - t0
         return song
+
+    def _load_staged(self, sha):
+        """Read each file of the song into this thread's pinned staging buffer (chunked) and DMA it to a fresh
+        device tensor on the side stream; returns (device tensors, bytes, event after the last copy)."""
+        from .data import npy_header
+        stage = self.staging.get()
+        try:
+            snp = stage.numpy()
+            dev, nbytes = [], 0
+            copy_ev = torch.cuda.Event()
+            for path in self.load_numpy.paths(sha, mel=self.mel):
+                with open(path, 'rb', buffering=0) as f:
+                    shape, dtype = npy_header(f)
+                    out = torch.empty(tuple(shape), dtype=torch.from_numpy(np.empty(0, dtype)).dtype, device=self.dev)
+                    flat = out.view(-1).view(torch.uint8)
+                    total, off = flat.numel(), 0
+                    while off < total:
+                        n = min(STAGE_BYTES, total - off)
+                        got = 0
+                        while got < n:
+                            k = f.readinto(snp[got:n])
+                            if not k:
+                                raise EOFError(f'{path}: short read at {off + got} of {total}')
+                            got += k
+                        with torch.cuda.stream(self.stream):
+                            flat[off:off + n].copy_(stage[:n], non_blocking=True)
+                            copy_ev.record(self.stream)
+                        copy_ev.synchronize()  # this thread only: the staging buffer is reused next
+                        off += n
+                    dev.append(out)
+                    nbytes += total
+            ev = torch.cuda.Event()
+            ev.record(self.stream)
+            return dev, nbytes, ev
+        finally:
+            self.staging.put(stage)
 
     def request(self, shas):
         """Start loading songs that are not resident; mark them pinned (a queued batch needs them)."""

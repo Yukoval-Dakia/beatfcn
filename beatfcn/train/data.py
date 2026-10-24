@@ -102,6 +102,15 @@ def read_bytes(path, chunk=8 << 20):
     return bytes(buf[:off])
 
 
+def npy_header(f):
+    """(shape, dtype) of a plain .npy from an open binary file positioned at 0; leaves f at the data start."""
+    version = np.lib.format.read_magic(f)
+    shape, fortran, dtype = np.lib.format._read_array_header(f, version)
+    if fortran or dtype.hasobject:
+        raise ValueError(f'{getattr(f, "name", "?")}: only C-order numeric .npy files are supported here')
+    return shape, dtype
+
+
 def read_npy(path, chunk=8 << 20):
     """np.load for a plain (non-object, C-order) .npy with large unbuffered reads straight into the array:
     FUSE volumes serve 8 MB reads ~5x faster than np.load's small reads."""
@@ -252,14 +261,19 @@ class Corpus:
     def quant(self):
         return bool(self.scale)
 
-    def load_numpy(self, sha, mel=True):
-        """Whole-song arrays for a SongPool: raw int8 taps (dequantised on the device), summary, mel (or None).
-        Read with read_npy (8 MB unbuffered chunks): np.load on the network volume measured 12-22 MB/s per
-        container against ~100 MB/s for chunked raw reads (reports/volume_reads_2026-10-24.json)."""
+    def song_paths(self, sha, mel=True):
+        """Files of a song in the order load_numpy returns them: taps per layer, S20 summary, optionally mel10."""
         base = os.path.join(self.root, 'taps', self.taps_key, sha)
         paths = [os.path.join(base, f'L{l}.npy') for l in self.layers] + [os.path.join(base, 'S20.npy')]
         if mel:
             paths.append(os.path.join(self.root, 'mel10', f'{sha}.npy'))
+        return paths
+
+    def load_numpy(self, sha, mel=True):
+        """Whole-song arrays for a SongPool: raw int8 taps (dequantised on the device), summary, mel (or None).
+        Read with read_npy (8 MB unbuffered chunks): np.load on the network volume measured 12-22 MB/s per
+        container against ~100 MB/s for chunked raw reads (reports/volume_reads_2026-10-24.json)."""
+        paths = self.song_paths(sha, mel)
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(len(paths)) as ex:
             arrs = list(ex.map(read_npy, paths))
