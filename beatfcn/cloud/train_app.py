@@ -339,6 +339,7 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
         scale_dev = torch.stack([torch.broadcast_to(torch.as_tensor(np.asarray(corpus.scale[l], np.float32)), (corpus.tap_dim,))
                                  for l in taps]).clone().to(torch.device(device))
     raw_it, queue = iter(stream), deque()
+    util_hist = deque(maxlen=8)
     worker_audits = {}
     samples_file = open(f'{runs[0].dir}/samples.jsonl', 'a')
 
@@ -507,6 +508,9 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
                 r.log({'event': 'train', **shared, 'grad_norm': float(r.gn), 'fields': summarize(r.acc)})
                 r.acc = {}
             u = shared['gpu_util']
+            if u is not None:  # the guard judges the mean of the last 8 log intervals: song-swap waves dip single intervals
+                util_hist.append(float(u))
+                u = sum(util_hist) / len(util_hist)
             if max_data_wait and shared['elapsed_s'] >= check_data_after_s and shared['data_wait_s'] > max_data_wait * shared['elapsed_s']:
                 # data starvation (a slow volume host: 13 s per song load seen vs 0.3-4 s): stop early, relaunch elsewhere
                 aborted = f"data wait {shared['data_wait_s']:.0f} s of {shared['elapsed_s']:.0f} s at step {step + 1}"
@@ -519,7 +523,7 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
                 checkpoint(step + 1)
                 break
             if min_util and u is not None and time.time() - t_loop >= check_after_s and u < min_util:
-                aborted = f'GPU util {u}% < {min_util}% at step {step + 1}'
+                aborted = f'GPU util {u:.1f}% (mean of {len(util_hist)} intervals) < {min_util}% at step {step + 1}'
                 log_all({'event': 'aborted', 'reason': aborted, 'step': step + 1})
                 checkpoint(step + 1)
                 break

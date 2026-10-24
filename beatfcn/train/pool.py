@@ -44,17 +44,20 @@ class SongPool:
         except TypeError:  # loaders without the mel flag (tests)
             taps_np, summary_np, mel_np = self.load_numpy(sha)
         arrays = [np.asarray(taps_np[l]) for l in self.taps] + [np.asarray(summary_np)] + ([np.asarray(mel_np)] if self.mel else [])
-        host = [torch.from_numpy(a).pin_memory() if self.cuda else torch.from_numpy(a) for a in arrays]
+        # pageable host -> device copies on the side stream: no pinned allocation per song (cudaHostAlloc /
+        # cudaFreeHost of ~115 MB per load are slow, serialising driver calls that stalled the DataLoader's
+        # pin-memory thread and the GPU at every song-swap wave; the copy itself needs only ~40 MB/s)
+        host = [torch.from_numpy(a) for a in arrays]
         if self.cuda:
             with torch.cuda.stream(self.stream):
-                dev = [h.to(self.dev, non_blocking=True) for h in host]
+                dev = [h.to(self.dev) for h in host]
                 ev = torch.cuda.Event()
                 ev.record(self.stream)
         else:
             dev, ev = host, None
         T = len(self.taps)
         song = _Song({l: t for l, t in zip(self.taps, dev[:T])}, dev[T], dev[T + 1] if self.mel else None, ev, sum(a.nbytes for a in arrays))
-        song._host = host if self.cuda else None  # keep pinned buffers alive until the copies complete
+        song._host = None  # pageable copies complete before .to() returns; nothing to keep alive
         self.stats['loads'] += 1
         self.stats['bytes'] += song.nbytes
         self.stats['load_s'] += time.time() - t0
