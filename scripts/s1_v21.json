@@ -1,11 +1,11 @@
 [
  {
   "run_id": "s1-v21",
-  "steps": 12000,
-  "stop_at": 10000,
+  "steps": 8000,
+  "stop_at": 0,
   "micro_batch": 8,
   "accumulation": 4,
-  "workers": 24,
+  "workers": 28,
   "val_cores": 120,
   "val_songs": 24,
   "warmup": 500,
@@ -39,7 +39,7 @@
    "memory": 65536,
    "timeout": 10800
   },
-  "max_wall_s": 3600.0,
+  "max_wall_s": 4200.0,
   "max_data_wait": 0.6,
   "check_data_after_s": 180.0
  }
