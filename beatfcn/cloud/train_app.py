@@ -861,6 +861,90 @@ def bench_reads(taps_key: str = 'v4_i8_L9-16-24', n: int = 12):
     return out
 
 
+@app.function(image=image, gpu='L40S', volumes={DATA: data}, cpu=8.0, memory=32768, timeout=1500)
+def bench_attach(prep_key: str = '91a2f7c9ff752366', taps_key: str = 'v4_i8_L9-16-24', pca: str = 'i8_9-16-24',
+                 micro_batch: int = 8, rounds: int = 3):
+    """Where attach_audio spends its time on a GPU host, with real songs and the cached validation cores: wall time
+    per micro-batch with and without host synchronisation, a cProfile of the CPU side, and the same while the
+    pool loads songs concurrently (the training run measured 50-150 ms per micro-batch on the main thread)."""
+    import copy
+    import cProfile
+    import io
+    import pstats
+    import numpy as np
+    import torch
+    from beatfcn.train.data import Corpus
+    from beatfcn.train.pool import SongPool
+    from beatfcn.model.batch import collate_meta, attach_audio
+    taps = (9, 16, 24)
+    val = torch.load(f'{DATA}/prep/{prep_key}.pt', map_location='cpu', weights_only=False)['val']
+    corpus = Corpus(root=DATA, taps_key=taps_key, layers=taps, pca=pca)
+    shas = sorted({s for _, s in val})
+    pool = SongPool(corpus.load_numpy, taps, 'cuda', capacity=len(shas) + 8, loaders=4, mel=False)
+    t0 = time.time()
+    pool.request(shas)
+    pool.wait_idle()
+    out = {'songs': len(shas), 'load_s': round(time.time() - t0, 1), 'pool_gb': round(pool.resident_bytes() / 2 ** 30, 2)}
+    infos = {s: corpus.song_info(s) for s in shas}
+    scale = torch.stack([torch.broadcast_to(torch.as_tensor(np.asarray(corpus.scale[l], np.float32)), (corpus.tap_dim,)) for l in taps]).clone().cuda()
+    from torch.utils.data._utils.pin_memory import pin_memory
+    batches = []
+    for i in range(0, len(val) - micro_batch + 1, micro_batch):
+        chunk = val[i:i + micro_batch]
+        bt = collate_meta([e for e, _ in chunk], [infos[s] for _, s in chunk], taps, 24, corpus.tap_dim, 1024, corpus.quant)
+        batches.append(pin_memory(bt))
+
+    def run(label, sync_each, profile=False, stream=None):
+        torch.cuda.synchronize()
+        pr = cProfile.Profile() if profile else None
+        t = time.time()
+        if pr:
+            pr.enable()
+        for _ in range(rounds):
+            for bt in batches:
+                b = copy.copy(bt)
+                b['_audio'] = dict(bt['_audio'])
+                with torch.cuda.stream(stream if stream is not None else torch.cuda.current_stream()):
+                    attach_audio(b, pool.get, 'cuda', scale)
+                if sync_each:
+                    torch.cuda.synchronize()
+        if pr:
+            pr.disable()
+        cpu = time.time() - t
+        torch.cuda.synchronize()
+        total = time.time() - t
+        n = rounds * len(batches)
+        out[label] = {'ms_per_batch_cpu': round(1000 * cpu / n, 1), 'ms_per_batch_total': round(1000 * total / n, 1)}
+        if pr:
+            sio = io.StringIO()
+            pstats.Stats(pr, stream=sio).sort_stats('tottime').print_stats(14)
+            out[label + '_profile'] = [l[:140] for l in sio.getvalue().splitlines()[6:24]]
+        print(label, out[label], flush=True)
+
+    run('attach_async', sync_each=False)  # CPU launch cost only (GPU work overlaps)
+    run('attach_sync', sync_each=True)  # + GPU execution per batch
+    run('attach_profile', sync_each=False, profile=True)
+    run('attach_side_stream', sync_each=False, stream=torch.cuda.Stream())
+    more = [s for s in sorted(_cached_songs(taps_key)) if s not in set(shas)][:8]
+    pool.request(more)  # concurrent loads (4 threads reading + copying) while attaching
+    run('attach_during_loads', sync_each=False)
+    pool.wait_idle()
+    out['hold_counts'] = [int(bt['hold_index'].shape[0]) for bt in batches]
+    out['ref_clusters'] = [len(bt['_audio']['ref_reads']) for bt in batches]
+    return out
+
+
+@app.local_entrypoint()
+def bench_attach_entry():
+    r = bench_attach.remote()
+    Path('reports/attach_profile_2026-10-24.json').write_text(json.dumps(r, indent=1))
+    print(json.dumps({k: v for k, v in r.items() if not k.endswith('_profile')}, indent=1))
+    for k in r:
+        if k.endswith('_profile'):
+            print(k)
+            print('\n'.join(r[k]))
+
+
 @app.local_entrypoint()
 def bench_reads_entry(n: int = 12):
     r = bench_reads.remote(n=n)
