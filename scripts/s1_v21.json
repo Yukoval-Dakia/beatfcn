@@ -1,7 +1,7 @@
 [
  {
   "run_id": "s1-v21",
-  "steps": 8000,
+  "steps": 6000,
   "stop_at": 0,
   "micro_batch": 8,
   "accumulation": 4,
@@ -25,12 +25,12 @@
   "tap_dim": 1024,
   "pool_songs": 160,
   "pool_per_worker": 1,
-  "prefetch": 4,
+  "prefetch": 2,
   "loaders": 4,
   "graph": true,
   "max_graphs": 2,
   "min_util": 50.0,
-  "check_after_s": 480.0,
+  "check_after_s": 600.0,
   "manifest_name": "charts.offset-v2-3d99ff6bd5e7.jsonl",
   "prep": true,
   "resources": {
@@ -39,8 +39,8 @@
    "memory": 65536,
    "timeout": 10800
   },
-  "max_wall_s": 4200.0,
-  "max_data_wait": 0.6,
-  "check_data_after_s": 180.0
+  "max_wall_s": 3900.0,
+  "max_data_wait": 0.8,
+  "check_data_after_s": 480.0
  }
 ]
