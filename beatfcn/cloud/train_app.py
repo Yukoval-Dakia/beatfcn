@@ -329,7 +329,7 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
     # prefetched batches, or songs get evicted and reloaded in a loop (review item C; 28 workers simulated 74%
     # reloads at 160). ~108 MB per song: 200 songs = 22 GB.
     n_modes = len({r['mode'] for r in train_rows})
-    need = workers * n_modes * pool_per_worker + prefetch * 8 + 8
+    need = workers * n_modes * pool_per_worker + prefetch * 2 + 8  # prefetched micro-batches mostly reuse resident songs
     if pool_songs < need:
         log_all({'event': 'pool_capacity', 'requested': pool_songs, 'raised_to': need, 'workers': workers, 'modes': n_modes, 'per_worker': pool_per_worker})
         pool_songs = need
@@ -344,7 +344,8 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
 
     def next_batch():
         """Prefetch `prefetch` metadata batches so their songs load in the background, then attach audio
-        on the device for the oldest one."""
+        on the device for the oldest one. The look-ahead must cover a song load (2-8 s on the volume) at
+        ~0.1 s per micro-batch: prefetch 2 stalled every song swap (0.70 s/step at 37% util)."""
         while len(queue) < prefetch:
             b, sk = next(raw_it)
             pool.request(b['_audio']['keys'])
