@@ -114,3 +114,21 @@ class PoolRefcountTests(unittest.TestCase):
         pool.request(['c'])
         pool.get('c')
         self.assertNotIn('a', pool.resident)
+
+
+class ReadNpyTests(unittest.TestCase):
+    def test_read_npy_matches_np_load(self):
+        import os
+        import tempfile
+        from beatfcn.train.data import read_npy
+        rng = np.random.default_rng(0)
+        with tempfile.TemporaryDirectory() as d:
+            for name, arr in (('i8', rng.integers(-128, 127, (300, 8, 64), dtype=np.int8)),
+                              ('f16', rng.standard_normal((70, 128)).astype(np.float16)),
+                              ('f32', rng.standard_normal((5, 8, 32)).astype(np.float32))):
+                p = os.path.join(d, name + '.npy')
+                np.save(p, arr)
+                got = read_npy(p, chunk=1000)  # several chunks per file
+                self.assertEqual(got.dtype, arr.dtype)
+                self.assertTrue(np.array_equal(got, arr))
+

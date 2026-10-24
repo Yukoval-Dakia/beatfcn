@@ -1,0 +1,47 @@
+{
+ "np.load/t1": {
+  "MB_s": 11.7,
+  "files": 36,
+  "s": 110.2
+ },
+ "np.load/t4": {
+  "MB_s": 22.0,
+  "files": 36,
+  "s": 66.8
+ },
+ "np.load/t12": {
+  "MB_s": 22.1,
+  "files": 36,
+  "s": 65.4
+ },
+ "mmap+copy/t1": {
+  "MB_s": 17.1,
+  "files": 36,
+  "s": 86.1
+ },
+ "mmap+copy/t4": {
+  "MB_s": 39.3,
+  "files": 36,
+  "s": 34.5
+ },
+ "mmap+copy/t12": {
+  "MB_s": 29.1,
+  "files": 36,
+  "s": 42.5
+ },
+ "os.read8MB/t1": {
+  "MB_s": 17.8,
+  "files": 36,
+  "s": 56.5
+ },
+ "os.read8MB/t4": {
+  "MB_s": 99.9,
+  "files": 36,
+  "s": 14.7
+ },
+ "os.read8MB/t12": {
+  "MB_s": 95.5,
+  "files": 36,
+  "s": 12.5
+ }
+}

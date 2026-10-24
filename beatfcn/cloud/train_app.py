@@ -773,6 +773,56 @@ def evaluate_whole(run_id: str, n_songs: int = 20, seed: int = 20261023, split: 
     print(json.dumps(result['summary'], indent=1))
 
 
+@app.function(image=image, volumes={DATA: data}, cpu=8.0, memory=16384, timeout=1800)
+def bench_reads(taps_key: str = 'v4_i8_L9-16-24', n: int = 12):
+    """Whole-song read throughput from the volume: three read paths x three concurrency levels, each on fresh
+    songs (cold page cache). The device song pool loads 12 GB per launch and was measured at 37-61 MB/s
+    with np.load x 12 threads, while memmap page faults reached ~480 MB/s per container earlier."""
+    import os
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    import numpy as np
+    shas = sorted(_cached_songs(taps_key))
+    files = lambda sha: [os.path.join(DATA, 'taps', taps_key, sha, f'L{l}.npy') for l in (9, 16, 24)]
+
+    def rd_npload(p):
+        return np.load(p).nbytes
+
+    def rd_mmap(p):
+        return np.array(np.load(p, mmap_mode='r')).nbytes
+
+    def rd_osread(p):
+        total = 0
+        with open(p, 'rb', buffering=0) as f:
+            while True:
+                b = f.read(8 << 20)
+                if not b:
+                    break
+                total += len(b)
+        return total
+
+    out, k = {}, 0
+    for name, fn in (('np.load', rd_npload), ('mmap+copy', rd_mmap), ('os.read8MB', rd_osread)):
+        for threads in (1, 4, 12):
+            group = shas[(k * n) % len(shas):(k * n) % len(shas) + n]
+            k += 1
+            paths = [p for sha in group for p in files(sha)]
+            t0 = time.time()
+            with ThreadPoolExecutor(threads) as ex:
+                total = sum(ex.map(fn, paths))
+            dt = time.time() - t0
+            out[f'{name}/t{threads}'] = {'MB_s': round(total / dt / 1e6, 1), 'files': len(paths), 's': round(dt, 1)}
+            print(name, threads, out[f'{name}/t{threads}'], flush=True)
+    return out
+
+
+@app.local_entrypoint()
+def bench_reads_entry(n: int = 12):
+    r = bench_reads.remote(n=n)
+    Path('reports/volume_reads_2026-10-24.json').write_text(json.dumps(r, indent=1))
+    print(json.dumps(r, indent=1))
+
+
 weights_vol = modal.Volume.from_name('beatfcn-weights', create_if_missing=True)
 
 

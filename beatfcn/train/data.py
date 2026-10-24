@@ -87,6 +87,26 @@ def check_stacks(events, max_stack=DUP_MAX_STACK):
     return top
 
 
+def read_npy(path, chunk=8 << 20):
+    """np.load for a plain (non-object, C-order) .npy with large unbuffered reads straight into the array:
+    FUSE volumes serve 8 MB reads ~5x faster than np.load's small reads."""
+    with open(path, 'rb', buffering=0) as f:
+        version = np.lib.format.read_magic(f)
+        shape, fortran, dtype = np.lib.format._read_array_header(f, version)
+        if fortran or dtype.hasobject:
+            f.seek(0)
+            return np.load(f)
+        arr = np.empty(shape, dtype)
+        mv = memoryview(arr.reshape(-1).view(np.uint8))
+        off, total = 0, arr.nbytes
+        while off < total:
+            n = f.readinto(mv[off:off + chunk])
+            if not n:
+                raise EOFError(f'{path}: short read at {off} of {total}')
+            off += n
+    return arr
+
+
 def npy_shape(path):
     """Shape from a .npy header without mapping or reading the data (network volumes: no mmap, one small read)."""
     with open(path, 'rb') as f:
@@ -212,15 +232,19 @@ class Corpus:
     def quant(self):
         return bool(self.scale)
 
-    def load_numpy(self, sha):
-        """Whole-song arrays for a SongPool: raw int8 taps (dequantised on the device), summary, mel."""
+    def load_numpy(self, sha, mel=True):
+        """Whole-song arrays for a SongPool: raw int8 taps (dequantised on the device), summary, mel (or None).
+        Read with read_npy (8 MB unbuffered chunks): np.load on the network volume measured 12-22 MB/s per
+        container against ~100 MB/s for chunked raw reads (reports/volume_reads_2026-10-24.json)."""
         base = os.path.join(self.root, 'taps', self.taps_key, sha)
-        paths = [os.path.join(base, f'L{l}.npy') for l in self.layers] + [os.path.join(base, 'S20.npy'),
-                                                                          os.path.join(self.root, 'mel10', f'{sha}.npy')]
+        paths = [os.path.join(base, f'L{l}.npy') for l in self.layers] + [os.path.join(base, 'S20.npy')]
+        if mel:
+            paths.append(os.path.join(self.root, 'mel10', f'{sha}.npy'))
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(len(paths)) as ex:
-            arrs = list(ex.map(np.load, paths))
-        return dict(zip(self.layers, arrs[:-2])), arrs[-2], arrs[-1]
+            arrs = list(ex.map(read_npy, paths))
+        T = len(self.layers)
+        return dict(zip(self.layers, arrs[:T])), arrs[T], arrs[T + 1] if mel else None
 
     def song(self, sha, in_memory=False) -> SongCache:
         """Memmapped by default: a core reads a few contiguous slices (16 s local audio, one reference

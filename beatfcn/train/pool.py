@@ -39,7 +39,10 @@ class SongPool:
     # ------------------------------------------------------------ loading
     def _load(self, sha):
         t0 = time.time()
-        taps_np, summary_np, mel_np = self.load_numpy(sha)
+        try:
+            taps_np, summary_np, mel_np = self.load_numpy(sha, mel=self.mel)
+        except TypeError:  # loaders without the mel flag (tests)
+            taps_np, summary_np, mel_np = self.load_numpy(sha)
         arrays = [np.asarray(taps_np[l]) for l in self.taps] + [np.asarray(summary_np)] + ([np.asarray(mel_np)] if self.mel else [])
         host = [torch.from_numpy(a).pin_memory() if self.cuda else torch.from_numpy(a) for a in arrays]
         if self.cuda:

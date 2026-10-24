@@ -26,7 +26,7 @@
   "pool_songs": 160,
   "pool_per_worker": 1,
   "prefetch": 4,
-  "loaders": 12,
+  "loaders": 4,
   "graph": true,
   "max_graphs": 2,
   "min_util": 50.0,
