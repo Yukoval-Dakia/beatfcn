@@ -517,7 +517,12 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
             dsum['worker_mean_s'] = round(dstat['worker_s'] / max(dstat['batches'], 1), 3)
             for k in dstat:
                 dstat[k] = 0.0 if isinstance(dstat[k], float) else 0
-            shared = {'step': step + 1, 'lr': lr_at(step, tc), 'examples': examples, 'data_wait_s': round(wait_s, 1), 'data': dsum,
+            alloc = {}
+            if cuda:  # caching-allocator health: retries / device mallocs+frees per interval reveal fragmentation stalls
+                ms = torch.cuda.memory_stats()
+                alloc = {k: ms.get(k, 0) for k in ('num_alloc_retries', 'num_device_alloc', 'num_device_free')}
+                alloc['reserved_gb'] = round(ms.get('reserved_bytes.all.current', 0) / 2 ** 30, 2)
+            shared = {'step': step + 1, 'lr': lr_at(step, tc), 'examples': examples, 'data_wait_s': round(wait_s, 1), 'data': dsum, 'alloc': alloc,
                       'gpu_s': round(gpu_s, 1), 'elapsed_s': round(time.time() - t0, 1),
                       'pool': {k: (round(v, 1) if isinstance(v, float) else v) for k, v in pool.stats.items()},
                       'graph': dict(gs.stats) if gs is not None else None,

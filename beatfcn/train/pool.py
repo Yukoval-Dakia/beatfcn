@@ -14,11 +14,15 @@ import numpy as np
 import torch
 
 
-class _Song:
-    __slots__ = ('taps', 'summary', 'mel10', 'event', 'nbytes', '_host')
+SLAB_ROWS = {3: 1000, 2: 64}  # size-class granularity by tensor rank: taps [cells, 8, D] per 1000 cells, summary [S, 8, D] per 64 rows
 
-    def __init__(self, taps, summary, mel10, event, nbytes):
+
+class _Song:
+    __slots__ = ('taps', 'summary', 'mel10', 'event', 'nbytes', '_host', 'slabs')
+
+    def __init__(self, taps, summary, mel10, event, nbytes, slabs=()):
         self.taps, self.summary, self.mel10, self.event, self.nbytes = taps, summary, mel10, event, nbytes
+        self.slabs = list(slabs)  # (key, slab) device buffers this song's tensors are views of (returned on eviction)
 
 
 class SongPool:
@@ -34,7 +38,11 @@ class SongPool:
         self.resident: OrderedDict[str, _Song] = OrderedDict()  # LRU order: oldest first
         self.pending: dict[str, object] = {}  # sha -> future
         self.pinned: dict[str, int] = {}  # sha -> number of queued batches referencing it: never evicted
-        self.stats = {'loads': 0, 'evictions': 0, 'load_s': 0.0, 'wait_s': 0.0, 'bytes': 0}
+        # device memory is recycled in size classes: evicted songs return their slabs, new songs reuse them, so the
+        # caching allocator sees no malloc/free churn (varying song sizes fragmented it and stalled the main thread
+        # once evictions began: attach time doubled and GPU utilisation fell to ~50%)
+        self.free: dict[tuple, list] = {}  # key -> [(slab, event the writer must wait for), ...]
+        self.stats = {'loads': 0, 'evictions': 0, 'load_s': 0.0, 'wait_s': 0.0, 'bytes': 0, 'slabs': 0}
 
     # ------------------------------------------------------------ loading
     def _load(self, sha):
@@ -44,24 +52,47 @@ class SongPool:
         except TypeError:  # loaders without the mel flag (tests)
             taps_np, summary_np, mel_np = self.load_numpy(sha)
         arrays = [np.asarray(taps_np[l]) for l in self.taps] + [np.asarray(summary_np)] + ([np.asarray(mel_np)] if self.mel else [])
-        # pageable host -> device copies on the side stream: no pinned allocation per song (cudaHostAlloc /
-        # cudaFreeHost of ~115 MB per load are slow, serialising driver calls that stalled the DataLoader's
-        # pin-memory thread and the GPU at every song-swap wave; the copy itself needs only ~40 MB/s)
+        # pageable host -> device copies on the side stream into recycled slabs: no pinned allocation per song
+        # (cudaHostAlloc / cudaFreeHost of ~115 MB per load are slow, serialising driver calls) and no device
+        # malloc / free per song (see __init__)
         host = [torch.from_numpy(a) for a in arrays]
+        dev, slabs = [], []
         if self.cuda:
             with torch.cuda.stream(self.stream):
-                dev = [h.to(self.dev) for h in host]
+                for h in host:
+                    slab, key = self._slab(h)
+                    slab[:h.shape[0]].copy_(h)
+                    dev.append(slab[:h.shape[0]])
+                    slabs.append((key, slab))
                 ev = torch.cuda.Event()
                 ev.record(self.stream)
         else:
             dev, ev = host, None
         T = len(self.taps)
-        song = _Song({l: t for l, t in zip(self.taps, dev[:T])}, dev[T], dev[T + 1] if self.mel else None, ev, sum(a.nbytes for a in arrays))
-        song._host = None  # pageable copies complete before .to() returns; nothing to keep alive
+        song = _Song({l: t for l, t in zip(self.taps, dev[:T])}, dev[T], dev[T + 1] if self.mel else None, ev,
+                     sum(a.nbytes for a in arrays), slabs)
+        song._host = None  # pageable copies complete before copy_() returns; nothing to keep alive
         self.stats['loads'] += 1
         self.stats['bytes'] += song.nbytes
         self.stats['load_s'] += time.time() - t0
         return song
+
+    def _slab(self, h):
+        """A device buffer for host tensor h [n, ...]: the smallest free slab of h's size class or larger (the
+        writer waits for the event recorded when it was freed), else a fresh allocation rounded to the class."""
+        rows = SLAB_ROWS.get(h.dim(), 1)
+        cls = -(-h.shape[0] // rows) * rows
+        base = (tuple(h.shape[1:]), h.dtype)
+        with self.lock:
+            fits = sorted(k for k in self.free if k[1:] == base and k[0] >= cls and self.free[k])
+            if fits:
+                key = fits[0]
+                slab, ev = self.free[key].pop()
+                self.stream.wait_event(ev)  # the main stream's last reads of the previous song must finish first
+                return slab, key
+        key = (cls, *base)
+        self.stats['slabs'] += 1
+        return torch.empty((cls, *h.shape[1:]), dtype=h.dtype, device=self.dev), key
 
     def request(self, shas):
         """Start loading songs that are not resident; mark them pinned (a queued batch needs them)."""
@@ -118,7 +149,12 @@ class SongPool:
                 victim = next((s for s in self.resident if s not in self.pinned), None)
                 if victim is None:
                     break
-                del self.resident[victim]
+                song = self.resident.pop(victim)
+                if self.cuda and song.slabs:  # recycle: writers wait for the reads already queued on this stream
+                    ev = torch.cuda.Event()
+                    ev.record(torch.cuda.current_stream())
+                    for key, slab in song.slabs:
+                        self.free.setdefault(key, []).append((slab, ev))
                 self.stats['evictions'] += 1
 
     def wait_idle(self):
