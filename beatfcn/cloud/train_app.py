@@ -1012,7 +1012,9 @@ def eval_controls(run_id: str, n_cores: int = 60, taps_key: str = 'v4_i8_L9-16-2
     model.load_state_dict(ck['model'])
     have = _cached_songs(taps_key)
     corpus = Corpus(DATA, taps_key, layers=cfg.taps, pca=pca)
-    trows = corpus.train_rows([r for r in load_manifest(DATA, split='val', manifest_name=manifest_name) if r['audio_sha256'] in have])
+    from beatfcn.ingest.offset import DECISION_VERSION
+    trows = corpus.train_rows([r for r in load_manifest(DATA, split='val', require_offset_version=DECISION_VERSION,
+                                                        manifest_name=manifest_name) if r['audio_sha256'] in have])
     want = set(fields.split(',')) if fields else None
     rng = np.random.default_rng(seed)
     records, tries, cores_done = [], 0, 0
@@ -1066,8 +1068,8 @@ def eval_controls(run_id: str, n_cores: int = 60, taps_key: str = 'v4_i8_L9-16-2
 
 
 @app.local_entrypoint()
-def controls(run_id: str, n_cores: int = 60):
-    r = eval_controls.remote(run_id, n_cores=n_cores)
+def controls(run_id: str, n_cores: int = 60, manifest_name: str = 'charts.jsonl', greedy: bool = True):
+    r = eval_controls.remote(run_id, n_cores=n_cores, manifest_name=manifest_name, greedy=greedy)
     Path(f'reports/controls_{run_id}.json').write_text(json.dumps(r, indent=1))
     print(json.dumps(r, indent=1))
 
