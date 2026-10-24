@@ -18,7 +18,7 @@ _HERE = Path(__file__).resolve()
 REPO = _HERE.parents[2] if len(_HERE.parents) > 2 else _HERE.parent
 DATA = '/data'
 app = modal.App('beatfcn-train')
-POOL, RESIDENCE = 6, 16  # per worker and mode: resident songs, draws (of up to 4 cores) each before eviction
+POOL, RESIDENCE = 6, 24  # per worker and mode: resident songs, draws (of up to 4 cores) each before eviction (24: ~38 MB/s of volume reads at 32 cores/0.3 s)
 data = modal.Volume.from_name('beatfcn-data', create_if_missing=True)
 image = (modal.Image.debian_slim(python_version='3.12')
          .pip_install('torch==2.14.1', index_url='https://download.pytorch.org/whl/cu130')
@@ -257,7 +257,8 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
           pca: str = '', cf_force: bool = False, stop_at: int = 0, whiten: bool = False, also: list | None = None,
           device: str = 'cuda', min_util: float = 0.0, check_after_s: float = 120.0, prep: str = '',
           pool_songs: int = 160, prefetch: int = 6, graph: bool = False, manifest_name: str = 'charts.jsonl',
-          pool_per_worker: int = POOL, max_graphs: int = 2, val_songs: int = 0, loaders: int = 8, max_wall_s: float = 0.0):
+          pool_per_worker: int = POOL, max_graphs: int = 2, val_songs: int = 0, loaders: int = 8, max_wall_s: float = 0.0,
+          max_data_wait: float = 0.0, check_data_after_s: float = 180.0):
     """stop_at: pause at this step (checkpointed) while the LR schedule still spans `steps`; a later call
     with the same run_id resumes from last.pt (S1 compares both variants at stop_at, then extends the winner).
 
@@ -505,6 +506,12 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
                 r.log({'event': 'train', **shared, 'grad_norm': float(r.gn), 'fields': summarize(r.acc)})
                 r.acc = {}
             u = shared['gpu_util']
+            if max_data_wait and shared['elapsed_s'] >= check_data_after_s and shared['data_wait_s'] > max_data_wait * shared['elapsed_s']:
+                # data starvation (a slow volume host: 13 s per song load seen vs 0.3-4 s): stop early, relaunch elsewhere
+                aborted = f"data wait {shared['data_wait_s']:.0f} s of {shared['elapsed_s']:.0f} s at step {step + 1}"
+                log_all({'event': 'aborted', 'reason': aborted, 'step': step + 1})
+                checkpoint(step + 1)
+                break
             if max_wall_s and time.time() - t_loop >= max_wall_s:  # cost cap: stop (resumable) instead of overrunning
                 aborted = f'wall clock {max_wall_s:.0f} s reached at step {step + 1}'
                 log_all({'event': 'aborted', 'reason': aborted, 'step': step + 1})
