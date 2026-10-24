@@ -50,6 +50,7 @@ class CoreSampler:
         self.pool, self.residence, self.resident = pool, residence, {}
         self.salient = salient  # song -> spectral-flux peak times (us) for unselected reference evidence
         self.perturb = perturb  # training: perturb the generated context (features.PERTURB); never for validation
+        self._seeded = set()
         self.rng = np.random.default_rng(seed)
         by_mode = {}
         for c in charts:
@@ -123,7 +124,11 @@ class CoreSampler:
             if self.salient:  # prime the peak cache from the resident mel when the cache carries one
                 mel = getattr(cache, 'mel10', None)
                 self.salient(sha, mel=mel) if mel is not None else self.salient(sha)
-            slots.append([sha, cache, 0])
+            # the first residency of each mode starts at a random use count: workers launched together would
+            # otherwise swap songs in lock-step, stalling the whole batch supply once per residence period
+            used = int(self.rng.integers(self.residence)) if mode not in self._seeded else 0
+            self._seeded.add(mode)
+            slots.append([sha, cache, used])
         k = int(self.rng.integers(len(slots)))
         slot = slots[k]
         slot[2] += 1

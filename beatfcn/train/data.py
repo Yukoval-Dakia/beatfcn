@@ -87,6 +87,21 @@ def check_stacks(events, max_stack=DUP_MAX_STACK):
     return top
 
 
+def read_bytes(path, chunk=8 << 20):
+    """Whole file with large unbuffered reads (network volumes: many small reads are the slow part)."""
+    size = os.stat(path).st_size
+    buf = bytearray(size)
+    mv = memoryview(buf)
+    off = 0
+    with open(path, 'rb', buffering=0) as f:
+        while off < size:
+            n = f.readinto(mv[off:off + chunk])
+            if not n:
+                break
+            off += n
+    return bytes(buf[:off])
+
+
 def read_npy(path, chunk=8 << 20):
     """np.load for a plain (non-object, C-order) .npy with large unbuffered reads straight into the array:
     FUSE volumes serve 8 MB reads ~5x faster than np.load's small reads."""
@@ -177,8 +192,7 @@ class Corpus:
 
     def _load_chart(self, chart_id) -> Chart:
         r = self._rows[chart_id]
-        with open(os.path.join(self.root, 'canon', r['source'], f"{r['native_id']}.json")) as f:
-            doc = json.load(f)
+        doc = json.loads(read_bytes(os.path.join(self.root, 'canon', r['source'], f"{r['native_id']}.json")))
         chart = chart_from_canon(doc, model_shift_us(r, self.apply_c))
         if dup_only(r):
             check_stacks(chart.events)
@@ -200,7 +214,7 @@ class Corpus:
         hit = self._salient.get(sha)
         if hit is None:
             from ..ingest.offset import flux_envelope, PEAK_MIN
-            mel = np.load(os.path.join(self.root, 'mel10', f'{sha}.npy')) if mel is None else mel
+            mel = read_npy(os.path.join(self.root, 'mel10', f'{sha}.npy')) if mel is None else mel
             env = flux_envelope(np.asarray(mel, np.float32))
             pk = np.where((env[1:-1] > env[:-2]) & (env[1:-1] >= env[2:]) & (env[1:-1] > PEAK_MIN))[0] + 1
             if len(self._salient) > 256:
