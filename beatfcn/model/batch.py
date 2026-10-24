@@ -298,6 +298,20 @@ def collate_meta(examples: list[F.CoreExample], infos: list[SongInfo], taps: tup
         out['hold_' + key] = torch.tensor(hold[key] + [0] * pad, dtype=torch.long)
     out['hold_prev'] = torch.tensor(hold_prev + [[NO_ONSET] * PREV_ONSETS] * pad, dtype=torch.float32).reshape(-1, PREV_ONSETS)
     recipe['Hp'] = Hp
+    # hold reads as tensors built here (pinned with the batch -> asynchronous H2D) and per-core ranges (holds are
+    # appended core by core): attach_audio must issue no pageable host->device copy, which would block the main
+    # thread until the GPU drained the previous step (measured: attach time ~= GPU time, utilisation ~50%)
+    recipe['hold_b0'] = torch.tensor([h[1] for h in recipe['holds']] + [0] * pad, dtype=torch.long)
+    recipe['hold_d0'] = torch.tensor([h[2] for h in recipe['holds']] + [0] * pad, dtype=torch.long)
+    ranges, i = [], 0
+    for b in range(B):
+        j = i
+        while j < H and recipe['holds'][j][0] == b:
+            j += 1
+        if j > i:
+            ranges.append((b, i, j))
+        i = j
+    recipe['hold_ranges'] = ranges
     out['_audio'] = recipe
     prepare_inner_indices(out)
     return out
@@ -338,13 +352,12 @@ def _dslice_strided(t, start, n, stride, out):
     return out
 
 
-def _gather_rows(t, starts, n, out, out_idx, dev):
-    """out[out_idx[i]] = t[starts[i] : starts[i] + n] (zero beyond t's rows), as one gather per call."""
-    idx = starts.to(dev)[:, None] + torch.arange(n, device=dev)[None]  # [k, n]
+def _gather_rows(t, starts, n, out, sl):
+    """out[sl][i] = t[starts[i] : starts[i] + n] (zero beyond t's rows), one gather; starts is a device tensor."""
+    idx = starts[:, None] + torch.arange(n, device=starts.device)[None]  # [k, n]
     ok = (idx >= 0) & (idx < t.shape[0])
     rows = t[idx.clamp(0, max(t.shape[0] - 1, 0))].to(out.dtype)  # [k, n, ...]
-    rows = rows.masked_fill(~ok[(...,) + (None,) * (rows.dim() - 2)], 0)
-    out[out_idx] = rows
+    out[sl] = rows.masked_fill(~ok[(...,) + (None,) * (rows.dim() - 2)], 0)
     return out
 
 
@@ -383,17 +396,13 @@ def attach_audio(bt: dict, get_song, device='cpu', scales=None, mel=False) -> di
             span = torch.zeros(hi - lo, 8, Dt, dtype=tdt, device=dev)
             _dslice(songs[b].taps[l], lo, hi - lo, span)
             ref_audio[b, gi, j] = span[ri]
-    if r['holds']:  # one gather per core for the block rows and one for the detail cells (a Python loop with two
-        # device copies per hold cost ~0.1 s per micro-batch on the main thread and starved the GPU)
-        hb = torch.tensor([h[0] for h in r['holds']])
-        b0s = torch.tensor([h[1] for h in r['holds']])
-        d0s = torch.tensor([h[2] for h in r['holds']])
-        for b in range(B):
-            sel = torch.nonzero(hb == b)[:, 0]
-            if not len(sel):
-                continue
-            _gather_rows(songs[b].summary, b0s[sel], F.MAX_END_BLOCKS, blocks, sel.to(dev), dev)
-            _gather_rows(songs[b].taps[top], d0s[sel], END_BLOCK_CELLS, detail, sel.to(dev), dev)
+    if r['hold_ranges']:  # one gather per core for the block rows and one for the detail cells; index tensors
+        # travel with the batch (pinned) and cross to the device asynchronously: no host sync on this thread
+        b0_dev = r['hold_b0'].to(dev, non_blocking=True)
+        d0_dev = r['hold_d0'].to(dev, non_blocking=True)
+        for b, i, j in r['hold_ranges']:
+            _gather_rows(songs[b].summary, b0_dev[i:j], F.MAX_END_BLOCKS, blocks, slice(i, j))
+            _gather_rows(songs[b].taps[top], d0_dev[i:j], END_BLOCK_CELLS, detail, slice(i, j))
     bt['audio'], bt['song_cells'], bt['ref_audio'] = audio, song_cells, ref_audio
     bt['hold_blocks'], bt['hold_detail'] = blocks, detail
     if quant:  # per-tap dequantisation scale [T, Dt]; applied on the device by dequant()
