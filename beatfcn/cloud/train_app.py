@@ -331,7 +331,9 @@ def train(run_id: str, steps: int = 3000, micro_batch: int = 8, accumulation: in
     stream = torch.utils.data.DataLoader(_stream(train_rows, corpus_args, tc.seed + 7919 * resume_step, micro_batch, tuple(taps),
                                                  max(taps), static=None, pool=pool_per_worker),  # graphs pad per tier: no filtering
                                          batch_size=None, num_workers=workers, prefetch_factor=4, persistent_workers=True,
-                                         pin_memory=device == 'cuda')  # pinned: every H2D copy in attach/_fill stays asynchronous
+                                         pin_memory=device == 'cuda',  # pinned: every H2D copy in attach/_fill stays asynchronous
+                                         in_order=False)  # no head-of-line blocking: a worker swapping songs (1-3 s) must not
+                                         # hold back the batches the other workers already produced (sampling is random anyway)
     from collections import deque
     from beatfcn.model.batch import attach_audio
     from beatfcn.train.pool import SongPool
