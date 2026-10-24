@@ -22,6 +22,7 @@ class Config:
     global_max_tokens: int = 600
     max_groups: int = 256
     max_prefix: int = 1536
+    density_enabled: bool = True  # density control toggle: True=follow density range, False=freely generate
 
 @dataclass
 class Context:
@@ -41,6 +42,12 @@ class Context:
     global_valid: torch.Tensor | None = None
     reference_valid: torch.Tensor | None = None
     known_valid: torch.Tensor | None = None
+    # Control parameters (wired up from request controls)
+    density_enabled: bool = True
+    density_notes_per_second: tuple[float, float] | None = None
+    hold_head_ratio: tuple[float, float] | None = None
+    allowed_types: list[str] | None = None
+    reference_strength: float = 0.8
 
     def fingerprint(self):
         h = hashlib.sha256()
